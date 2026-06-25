@@ -20,7 +20,7 @@ Refer the Configuration Parameters in the Appendix section of API documentation 
         </display>
         <input_devices>
              <touch_screen>
-                <use_internally>true</use_internally>
+                <use_internally>false</use_internally>
                 <path>/dev/input/filtered-touchscreen0</path>
                 <type>AAP_TOUCH_SCREEN_TYPE_CAPACITIVE</type>
                 <as_secondary_input>false</as_secondary_input>
