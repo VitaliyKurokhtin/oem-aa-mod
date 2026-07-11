@@ -129,13 +129,13 @@ void emit_guidance(uint32_t dir_icon, int32_t maneuver_dist,
     ok = ok && (dbus_message_iter_append_basic(&it, DBUS_TYPE_STRING, &s) != 0);
     ok = ok && append_i32(&it, kAapSpeedSentinel); // speedLimit
     ok = ok && append_i32(&it, 0);                 // speedUnit
-    // lane0..7. Each is the HUD lane-glyph byte svcjcinavi forwards to
-    // SetRecommLaneReq: marked(22)/unmarked(1), 0 = no lane. We pass 0 (not
-    // 0xFF) for empty slots because svcjcinavi's handler validates each lane arg
-    // to 0..0x46 and would reject 0xFF. The 1.5 path passes lanes=null/n=0 -> all
-    // zero, unchanged. (Exact per-shape glyph code TBD on-car.)
+    // lane0..7: one OEM lane code per lane (see hud_lane.h) — svcjcinavi remaps
+    // each code to a cluster glyph itself (basic/extended cluster chosen by
+    // CMU-control 0x18), so we never deal in glyphs here. Empty slots are 0, not
+    // 0xFF: svcjcinavi validates each lane arg to 0..0x46 and would reject 0xFF.
+    // The 1.5 path passes lanes=null / n=0, so all eight come out 0 (no lanes).
     uint8_t lb[8];
-    aa_nav16_lane_bytes(lanes, n_lanes, lb, /*hidden=*/0);
+    aa_nav16_lane_codes(lanes, n_lanes, lb, /*hidden=*/0);
     for (int i = 0; i < 8 && ok; ++i) {
         ok = append_i32(&it, static_cast<int32_t>(lb[i]));
     }
@@ -150,9 +150,11 @@ void emit_guidance(uint32_t dir_icon, int32_t maneuver_dist,
     } else {
         dbus_connection_flush(g_conn);
         LOGV("svcnavi sender: GuidanceChangedForHUD dirIcon=%u dist=%d unit=%d "
-             "street=\"%s\" speedLimit=0x%x",
+             "street=\"%s\" speedLimit=0x%x lanes=%u,%u,%u,%u,%u,%u,%u,%u",
              static_cast<unsigned>(dir_icon), maneuver_dist, dist_unit, s,
-             static_cast<unsigned>(kAapSpeedSentinel));
+             static_cast<unsigned>(kAapSpeedSentinel),
+             (unsigned)lb[0], (unsigned)lb[1], (unsigned)lb[2], (unsigned)lb[3],
+             (unsigned)lb[4], (unsigned)lb[5], (unsigned)lb[6], (unsigned)lb[7]);
     }
     dbus_message_unref(msg);
 }

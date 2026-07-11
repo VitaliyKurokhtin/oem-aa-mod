@@ -14,6 +14,8 @@
 
 #include <stdint.h>
 
+#include "hud_lane.h"   // shared OEM lane-code space + AA->OEM mapping (version-agnostic)
+
 enum { HUD_NAV16_MAX_LANES = 8 };
 
 // One physical lane: the arrows it shows (Shape 0..9) as bitmasks, plus which
@@ -23,30 +25,30 @@ struct AaLane {
     uint16_t highlight_mask;
 };
 
-// Encode decoded lanes to the 8-slot HUD lane array, LEFT TO RIGHT. Only
-// marked-vs-unmarked is encoded for a present lane (recommended = highlight_mask
-// != 0); 1 (unmarked) and 22 (marked) are valid on both HUD variants (byte
-// ranges 0-32 and 0-62). The exact per-shape glyph code is TBD on-car.
-//
-// `hidden` (the "no lane in this slot" code) DIFFERS by transport:
-//   - direct VBS_NAVI_SetRecommLaneReq (vbs path): 0xFF hides a slot — confirmed
-//     against the OEM setter + lane_test (AA_NAV16_LANE_HIDDEN).
-//   - GuidanceChangedForHUD signal (svcnavi path): svcjcinavi's handler validates
-//     each lane arg to 0..0x46, so 0xFF is out of range there — pass 0.
-enum {
-    AA_NAV16_LANE_HIDDEN   = 0xFF,   // vbs / SetRecommLaneReq per-slot hide
-    AA_NAV16_LANE_UNMARKED = 1,
-    AA_NAV16_LANE_MARKED   = 22,
-};
+// Lane guidance is produced as OEM lane CODES (see hud_lane.h / oem_lane_code_for_aa).
+// Two transports consume them:
+//   * svcnavi path: emits the CODES and lets svcjcinavi do code->glyph + A/B
+//     (aa_nav16_lane_codes below).
+//   * vbs path: bypasses svcjcinavi, so it takes those same CODES and applies the
+//     code->glyph + A/B map itself (hud_lane.h::oem_lane_glyph) before sending.
 
-inline void aa_nav16_lane_bytes(const AaLane *lanes, uint8_t n,
+// Fill the 8 lane slots with OEM lane CODES (both transports call this). The full
+// AA-shape -> OEM-code mapping (single arrows, combos, and the recommended-direction
+// detail codes) lives in the version-agnostic hud_lane.h; here we only fill the slots
+// and hide empties. `hidden` is the CALLER's per-slot "no lane" sentinel: svcnavi
+// passes 0 (svcjcinavi validates each arg to 0..0x46); the vbs path passes its own
+// 0xFF empty-slot marker.
+inline void aa_nav16_lane_codes(const AaLane *lanes, uint8_t n,
                                 uint8_t out[8], uint8_t hidden)
 {
     for (int i = 0; i < 8; ++i) {
-        out[i] = (lanes && i < (int)n)
-                     ? (uint8_t)(lanes[i].highlight_mask ? AA_NAV16_LANE_MARKED
-                                                         : AA_NAV16_LANE_UNMARKED)
-                     : hidden;
+        if (!lanes || i >= (int)n) {
+            out[i] = hidden;
+            continue;
+        }
+        const OemLaneCode c = oem_lane_code_for_aa(lanes[i].present_mask,
+                                                   lanes[i].highlight_mask);
+        out[i] = (c == OEM_LANE_NONE) ? hidden : (uint8_t)c;
     }
 }
 

@@ -31,7 +31,7 @@
 #define LIBPATCH_BLMJCIAAPA_VBS_TX_H
 
 #include <stdint.h>
-#include "hud_nav16.h"   // AaLane, aa_nav16_lane_bytes, AA_NAV16_LANE_*
+#include "hud_nav16.h"   // AaLane (vbs_tx_v16 lane-strip param)
 
 // Defined in vbs_tx.cpp. HUD output lifecycle. vbs_tx_start opens
 // the OEM HMI + Service D-Bus connections, spawns a dispatcher

@@ -47,7 +47,7 @@
 #define LIBPATCH_BLMJCIAAPA_HUD_SVCNAVI_TX_H
 
 #include <stdint.h>
-#include "hud_nav16.h"   // AaLane, aa_nav16_lane_bytes, AA_NAV16_LANE_*
+#include "hud_nav16.h"   // AaLane, aa_nav16_lane_codes
 
 // HUD output lifecycle. svcnavi_tx_start opens the OEM service-bus
 // connection (libjcidbus, exit-on-disconnect disabled) on a

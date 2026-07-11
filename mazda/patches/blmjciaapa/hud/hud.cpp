@@ -24,7 +24,7 @@
 #include "svcnavi_tx.h"
 #include "vbs_tx.h"
 #include "translit.h"   // hud_translit::fold() — precomposed-Latin street-name fold
-#include "hud_nav16.h"  // 1.6 decoder + AaLane + aa_nav16_lane_bytes + aa_to_mazda_unit/parse_dist_x10
+#include "hud_nav16.h"  // 1.6 nav decoder + AaLane + aa_to_mazda_unit/parse_dist_x10
 #include "common/aa_nav16_msg.h"   // AA_NAV16_MSG_* — the sender/receiver msgId contract
 
 #include <stdint.h>

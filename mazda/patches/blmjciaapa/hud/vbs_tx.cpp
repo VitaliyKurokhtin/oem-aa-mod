@@ -67,6 +67,11 @@ namespace {
 // oem/libjcivbsnaviclient.{h,cpp}.
 constexpr const char *kBusName = "com.jci.aapa.hud";
 
+// Empty-slot sentinel for VBS_NAVI_SetRecommLaneReq's (ay) lane array: 0xFF hides a
+// slot. This is the OEM VBS convention for that method (svcjcinavi's own upstream
+// GuidanceChangedForHUD path uses 0, validated 0..0x46 — a different domain).
+constexpr uint8_t kVbsLaneHidden = 0xFF;
+
 // The HUD turn-icon enum, kTurnIcons table, roundabout_icon(),
 // map_distance_unit(), and compute_turn_icon() are shared with the
 // svcnavi transport — see hud_nav.h.
@@ -148,6 +153,9 @@ extern "C" void hud_status_cb(void *conn, unsigned char status, void *user)
          static_cast<unsigned>(status), absent ? "no HUD" : "HUD present");
 }
 
+// Which code->glyph table to map lanes through. Forced to Table A for now.
+OemLaneTable vbs_lane_table() { return OEM_LANE_TABLE_A; }
+
 // Helper: snap vs prev → which OEM HUD calls to make. Pulled out
 // for readability; sender_main owns the prev/sync_bit state and
 // threads them through here. Sends are async (the OEM setters
@@ -189,21 +197,16 @@ void send_one(const NaviSnapshot &cur,
                             cur.turn_side     != prev.turn_side     ||
                             cur.turn_event    != prev.turn_event;
 
-    // Lanes ride a SEPARATE OEM method (SetRecommLaneReq, see below). Encode
-    // both frames' lanes to the HUD byte form and send only when they differ
-    // (the 1.5 path has no lanes -> both encode to all-0xFF -> never sent).
-    // Direct SetRecommLaneReq path: 0xFF hides an empty slot.
-    // Gated by hud_lanes: runtime kill-switch for the lane path, so lane sends
-    // can be turned off in the field. See libjcivbsnaviclient.h for the OEM
-    // lane setter's ABI.
-    const bool lanes_enabled = libpatch_config::hud_lanes();
-    uint8_t cur_lanes[8], prev_lanes[8];
-    aa_nav16_lane_bytes(cur.use_precomp  ? cur.lanes  : nullptr,
-                        cur.use_precomp  ? cur.n_lanes  : 0, cur_lanes,  AA_NAV16_LANE_HIDDEN);
-    aa_nav16_lane_bytes(prev.use_precomp ? prev.lanes : nullptr,
-                        prev.use_precomp ? prev.n_lanes : 0, prev_lanes, AA_NAV16_LANE_HIDDEN);
-    bool lanes_changed = lanes_enabled &&
-                         std::memcmp(cur_lanes, prev_lanes, sizeof(cur_lanes)) != 0;
+    // Lane strip: the direct-VBS path is downstream of svcjcinavi, so it applies
+    // svcjcinavi's own code->glyph + A/B (basic/extended cluster) map itself and
+    // sends the final glyph bytes on VBS_NAVI_SetRecommLaneReq (below). Computed
+    // here too so a lane-only change still wakes a send — and, because the strip
+    // latches to the sync bit, that change also bumps the sync (see send_msg2).
+    const bool lanes_changed = libpatch_config::hud_lanes() &&
+        (event_changed ||
+         cur.n_lanes != prev.n_lanes ||
+         std::memcmp(cur.lanes, prev.lanes,
+                     cur.n_lanes * sizeof(cur.lanes[0])) != 0);
 
     if (!event_changed && !distance_changed && !lanes_changed) {
         LOGV("hud_send: snapshot unchanged vs previous — no HUD frame sent");
@@ -220,23 +223,12 @@ void send_one(const NaviSnapshot &cur,
     VbsNaviHudMsg2    msg2 = {};
     std::string       road;
 
-    // A lane array carries no sync of its own — the HUD pairs it with the
-    // maneuver + street frames of the SAME sync generation. So a lane change
-    // starts a new generation just like a maneuver change, and whenever lanes
-    // are sent we re-send the maneuver + street frames carrying that same bumped
-    // sync (this is what the OEM / lane_test do: all three per generation). A
-    // distance-only tick stays in the current generation (no bump, no lanes).
-    bool send_msg2  = event_changed || lanes_changed;   // street strip (carries the sync)
-    bool send_disp  = distance_changed || send_msg2;     // maneuver/distance frame
-    // Re-send lanes with a new sync generation only when there is a lane to
-    // show — an all-hidden array has nothing to pair with the generation, and
-    // shown->hidden transitions are already covered by lanes_changed.
-    bool cur_lanes_visible = false;
-    for (size_t i = 0; i < sizeof(cur_lanes); ++i) {
-        if (cur_lanes[i] != AA_NAV16_LANE_HIDDEN) { cur_lanes_visible = true; break; }
-    }
-    bool send_lanes = lanes_changed ||
-                      (lanes_enabled && cur.use_precomp && send_msg2 && cur_lanes_visible);
+    // A new maneuver instance (icon/street change) OR a lane change bumps the sync:
+    // the lane strip latches to the sync bit (SetRecommLaneReq has no sync field of
+    // its own), so a lane update must ride a fresh generation. Distance-only ticks
+    // stay in the current one.
+    bool send_msg2 = event_changed || lanes_changed; // street strip (carries the sync)
+    bool send_disp = distance_changed || send_msg2;  // maneuver/distance frame
 
     if (send_msg2) {
         // Bump 1..7 cyclically — the HUD treats a new sync_bit as the start of a
@@ -305,23 +297,26 @@ void send_one(const NaviSnapshot &cur,
             LOGE("hud_send: SetHUD_Display_Msg2 failed rc=%d", rc);
         }
     }
-    if (send_lanes) {
-        // Same sync generation as the disp/msg2 just sent (send_msg2 is forced
-        // true whenever lanes go out, so sync was bumped above). The HUD ties the
-        // lane array to that generation. 8 bytes, 0xFF hides a slot. The OEM
-        // setter dereferences both middle args (see libjcivbsnaviclient.h), so
-        // it gets pointers to the data pointer and the count.
-        const uint8_t *lane_data  = cur_lanes;
-        const uint32_t lane_count = sizeof(cur_lanes);
-        int rc = VBS_NAVI_SetRecommLaneReq(g_conn, &lane_data, &lane_count,
-                                           nullptr, nullptr);
-        LOGV("hud_send: SetRecommLaneReq sync=%u [%u %u %u %u %u %u %u %u] rc=%d",
-             static_cast<unsigned>(sync_bit),
-             cur_lanes[0], cur_lanes[1], cur_lanes[2], cur_lanes[3],
-             cur_lanes[4], cur_lanes[5], cur_lanes[6], cur_lanes[7], rc);
-        if (rc != 0) {
-            LOGE("hud_send: SetRecommLaneReq failed rc=%d", rc);
+    // Lane strip — a separate OEM method ((ay)); 0xFF hides an empty slot. We do
+    // svcjcinavi's own code->glyph + A/B map here (it bypasses svcjcinavi).
+    if (lanes_changed) {
+        const OemLaneTable tbl = vbs_lane_table();
+        // Same OEM lane CODES the svcnavi path emits (no duplication), then apply
+        // svcjcinavi's own code->glyph map (A/B) in place — empty slots stay 0xFF.
+        uint8_t lb[8];
+        aa_nav16_lane_codes(cur.lanes, cur.n_lanes, lb, kVbsLaneHidden);
+        for (int i = 0; i < 8; ++i) {
+            if (lb[i] != kVbsLaneHidden) {
+                lb[i] = oem_lane_glyph((OemLaneCode)lb[i], tbl);
+            }
         }
+        LOGV("hud_send: SetRecommLaneReq table=%s lanes=[%u,%u,%u,%u,%u,%u,%u,%u]",
+             tbl == OEM_LANE_TABLE_B ? "B" : "A",
+             lb[0], lb[1], lb[2], lb[3], lb[4], lb[5], lb[6], lb[7]);
+        const uint8_t *lane_data  = lb;
+        const uint32_t lane_count = sizeof(lb);
+        int rc = VBS_NAVI_SetRecommLaneReq(g_conn, &lane_data, &lane_count, nullptr, nullptr);
+        if (rc != 0) LOGE("hud_send: SetRecommLaneReq failed rc=%d", rc);
     }
 }
 
@@ -407,7 +402,7 @@ void sender_teardown()
         // Only when lane sends are enabled — none were shown otherwise.
         if (libpatch_config::hud_lanes()) {
             uint8_t clear_lanes[8];
-            std::memset(clear_lanes, AA_NAV16_LANE_HIDDEN, sizeof(clear_lanes));
+            std::memset(clear_lanes, kVbsLaneHidden, sizeof(clear_lanes));
             const uint8_t *lane_data  = clear_lanes;
             const uint32_t lane_count = sizeof(clear_lanes);
             VBS_NAVI_SetRecommLaneReq(g_conn, &lane_data, &lane_count,
