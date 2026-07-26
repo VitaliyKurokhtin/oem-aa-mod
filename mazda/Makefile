@@ -91,7 +91,7 @@ COMMON_CXXFLAGS := -std=c++11 \
 # correctly. We pick up libstdc++.so.6 as a DT_NEEDED instead.
 COMMON_LDFLAGS  := --sysroot=$(SYSROOT) -shared \
                    -Wl,--no-undefined \
-                   -lpthread -ldl \
+                   -lpthread -ldl -lrt \
                    $(PKG_LIBS)
 
 # Debug: no optimization, full debug info, no LTO so symbols/inlining are sane.

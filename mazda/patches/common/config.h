@@ -27,9 +27,17 @@
 //                                     1.6 navigation protocol (maneuver / lanes / distance)
 //                                     instead of the 1.5 turn events; read by aap_service
 //                                     (default false = stock 1.5)
-//   aa_audio_low_latency = true|false lower Android Auto playback's ALSA start threshold
-//                                     from the full buffer to one negotiated period;
-//                                     read by aap_service (default false)
+//   aa_audio_low_latency = true|false Android Auto low-latency audio: the AA audio-cutoff
+//                                     fix, all three edges of a prompt under one switch.
+//                                     Start/head — lower AA playback's ALSA start threshold
+//                                     to one period (audio.cpp) and self-activate the guidance
+//                                     pipeline after a short pre-roll (goactive.cpp).
+//                                     Beginning — hold one dmix client open in jciAAPA so the
+//                                     shared hw:0,0 stays warm and the first AA prompt over a
+//                                     tuner isn't lost to the cold dmix open (audio_keepalive.cpp).
+//                                     End/tail — extend the too-short EOS-drain wait
+//                                     (sem_clockfix.cpp) and hold the amp mix until the drain
+//                                     finishes (audio_stopdelay.cpp). Read by both libs (default false)
 //   mute_pauses_phone = true|false    on a user mute, send Android Auto a media PAUSE (and a
 //                                     media PLAY on unmute) so the phone stops streaming while
 //                                     muted instead of only silencing the amp (default true)
