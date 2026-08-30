@@ -1,20 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// goactive.cpp — fix the start ("head") of an Android Auto nav/guidance prompt being clipped
-// when prompts arrive back-to-back.
+// goactive.cpp — start ("head") of an Android Auto nav/guidance prompt underrunning the ALSA
+// sink, which garbles the first fraction of the prompt.
 //
 // The guidance audio pipeline only starts playing once the head unit sends its "go active"
-// command, which arrives after the phone has already begun streaming. Until then every
-// incoming frame is buffered in the player's small ring. If the pipeline is then activated on
-// just one buffered frame, the ALSA sink underruns before the next frame arrives and the first
-// few milliseconds are lost; when prompts come back-to-back the head unit's go-active is
-// delayed further and more of the head is dropped.
+// command, which arrives after the phone has already begun streaming. Until then every incoming
+// frame is buffered in the player's small ring. Waiting for that late go-active is itself lost
+// head, so we self-activate as soon as a minimal cushion of frames has buffered — this ADVANCES
+// the prompt onset versus stock (we start before the head unit tells us to), which is exactly what
+// a nav prompt wants: the voice must not start late.
 //
-// We interpose the player's push-buffer entry point (reached for every incoming frame). When a
-// guidance frame is buffered because the pipeline is still inactive, we count it; once a few
-// frames have accumulated we self-activate the pipeline via the player's own AudioActive(), so
-// it starts with a cushion instead of on one frame. The buffered frames (head included) drain
-// into the pipeline on activation, and the head unit's later go-active becomes a harmless no-op.
+// The cushion here is deliberately the SMALLEST that lets the pipeline come up cleanly — its job
+// is a fast onset, not riding delivery jitter. Making it deeper would only push the voice onset
+// later, which is unacceptable for guidance. The jitter-underrun that garbles some prompts is an
+// ALSA sink-buffer problem and is addressed on the sink side (audio.cpp), where cushion can be
+// added without moving the onset.
 //
 // Pure interpose — no memory writes, no detour, so none of aap_service's restart risk. Gated by
 // libpatch.conf `aa_audio_low_latency` (the AA low-latency audio switch; this is its start-side half,
@@ -31,12 +31,13 @@
 #include "common/config.h"      // libpatch_config::{load,aa_audio_low_latency} (opt-in gate)
 
 #include <stdint.h>
+#include <time.h>              // clock_gettime — measurement-only per-frame arrival probe (VERBOSE)
 
 namespace {
 
 // Read the player's stream-type field the same way the player does: player -> context
 // sub-object (+0x6c) -> stream-type word (+0x10). Only the guidance/nav stream (0xa02) suffers
-// the back-to-back head clip, so media and the third stream are intentionally left alone.
+// the onset underrun, so media and the third stream are intentionally left alone.
 const uintptr_t kPlayerCtxOff   = 0x6c;   // player -> context sub-object
 const uintptr_t kStreamTypeOff  = 0x10;   // context sub-object -> stream-type word
 const unsigned  kStreamGuidance = 0xa02;  // the guidance/nav audio stream
@@ -44,11 +45,13 @@ const unsigned  kStreamGuidance = 0xa02;  // the guidance/nav audio stream
 // push_buffer's return value when the frame was buffered because the pipeline is inactive.
 const int kRingedRet = -2;
 
-// How many buffered guidance frames to accumulate before self-activating. Activating on the
-// first frame starts the pipeline with ~1 frame buffered, and the ALSA sink (start threshold of
-// one period, see audio.cpp) then underruns on the phone's early trickle — the first few ms drop
-// and garble. Three frames is the smallest cushion that starts cleanly, and it is far below the
-// player's ring capacity so accumulating it never drops the head of the prompt.
+// How many buffered guidance frames to accumulate before self-activating. This is a fast-onset
+// knob, NOT a jitter cushion: keep it as small as possible so the voice starts as early as
+// possible. Activating on the very first frame can come up before the pipeline is settled;
+// three frames is the smallest count that reliably brings the pipeline up, and it is far below
+// the player's ring capacity so accumulating it never drops the head of the prompt. Raising it
+// would delay the voice onset — which for a nav prompt is a safety regression — so the fix for
+// jitter garble lives on the ALSA sink side instead (see audio.cpp), not here.
 const int kPrerollFloor = 3;
 
 typedef int  (*push_buffer_fn)(void *player, void *a1, void *data, unsigned int len);
@@ -89,9 +92,28 @@ int gst_media_audio_player_push_buffer(void *player, void *a1, void *data, unsig
     if (!enabled)
         return ret;
 
-    // Only the guidance stream (0xa02) suffers the dense-prompt start starvation.
+    // Only the guidance stream (0xa02) suffers the onset underrun.
     if (read_stream_type(player) != kStreamGuidance)
         return ret;
+
+#if LOG_LEVEL <= LOG_LEVEL_VERBOSE
+    // Measurement-only (compiled out of release): one line per guidance frame so a single capture
+    // reveals the head profile without any behaviour change — ret (-2 buffered / 0 accepted marks
+    // where playback started), len (chunk size => pre-roll depth in bytes/ms), and dt (inter-frame
+    // arrival gap => the delivery jitter that underruns the sink). The tool derives pre-roll ms
+    // and the max early gap from this stream.
+    {
+        static struct timespec probe_prev = { 0, 0 };
+        struct timespec probe_now;
+        clock_gettime(CLOCK_MONOTONIC, &probe_now);
+        long probe_dt = (probe_prev.tv_sec || probe_prev.tv_nsec)
+            ? (probe_now.tv_sec - probe_prev.tv_sec) * 1000L
+              + (probe_now.tv_nsec - probe_prev.tv_nsec) / 1000000L
+            : -1;
+        probe_prev = probe_now;
+        LOGV("gd frame ret=%d len=%u dt=%ldms", ret, len, probe_dt);
+    }
+#endif
 
     // This push runs on the player's single audio worker — the same thread AudioActive runs on —
     // so no lock is needed and calling AudioActive from here is thread-correct (and idempotent
@@ -100,7 +122,8 @@ int gst_media_audio_player_push_buffer(void *player, void *a1, void *data, unsig
     //               and re-arm for the next prompt's cold start.
     //   ret == -2 : the frame was buffered because the pipeline is inactive. Count it; once
     //               kPrerollFloor frames have accumulated, self-activate so the buffered cushion
-    //               (head frame included) drains into the sink and it starts cleanly.
+    //               (head frame included) drains into the sink and it starts cleanly — earlier
+    //               than the head unit's own (late) go-active.
     //
     // `ringed` resets only on ret == 0, so a prompt shorter than the floor that never plays leaves
     // it non-zero; the effect is bounded (the next start may activate a frame or two early) and
@@ -119,7 +142,7 @@ int gst_media_audio_player_push_buffer(void *player, void *a1, void *data, unsig
     }
     if (ret != kRingedRet || !armed)
         return ret;
-    if (++ringed < kPrerollFloor)   // accumulate the cushion before activating
+    if (++ringed < kPrerollFloor)   // accumulate the minimal cushion before activating
         return ret;
     armed = false;
 
@@ -130,7 +153,7 @@ int gst_media_audio_player_push_buffer(void *player, void *a1, void *data, unsig
     if (aa) {
         aa(static_cast<int>(kStreamGuidance));
         LOGD("self-activated guidance pipeline after %d-frame pre-roll "
-             "(dense-prompt start-cutoff fix); go-active race bypassed", kPrerollFloor);
+             "(onset start-cutoff fix); go-active race bypassed", kPrerollFloor);
     }
     return ret;
 }

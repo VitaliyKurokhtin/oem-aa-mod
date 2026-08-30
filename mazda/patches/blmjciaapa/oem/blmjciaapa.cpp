@@ -43,6 +43,8 @@ constexpr uintptr_t AudioManager_IsAAMediaInPlaying = 0x000ac3f8;
 constexpr uintptr_t RaceAap_SendTouchInput        = 0x0008e3a8;
 //   _ZN7RaceAap12SendKeyInputEP12AAP_KeyEvent
 constexpr uintptr_t RaceAap_SendKeyInput          = 0x0008e534;
+//   _ZN12AudioManager21SendReplyRequestFocusE14AAP_StreamType17AAP_StreamRequest
+constexpr uintptr_t AudioManager_SendReplyRequestFocus = 0x000a6f40;
 //   _ZN20AapConnectionManager21NotifyBtPairingResultE12true_false_t
 constexpr uintptr_t AapConnectionManager_NotifyBtPairingResult = 0x0007c820;
 //   _ZN20AapConnectionManager18ActivateAapSessionEv
@@ -178,6 +180,14 @@ BLM_FIELD_PTR(char, AapConnectionManager_dev_name,
               off::AapConnectionManager_DevName)
 BLM_FIELD(int, AapConnectionManager_connect_mode,
           off::AapConnectionManager_ConnectMode, -1)
+
+// Address (not a forward) of AudioManager::SendReplyRequestFocus, for the
+// audio head pre-open's entry detour. Same anchor-and-offset resolution as
+// the thunks; nullptr until blmjciaapa.so is mapped.
+void *AudioManager_SendReplyRequestFocus_addr(void)
+{
+	return blm_addr(off::AudioManager_SendReplyRequestFocus);
+}
 
 		  
 // AapConnectionManager instance accessor. GetInstance() may return

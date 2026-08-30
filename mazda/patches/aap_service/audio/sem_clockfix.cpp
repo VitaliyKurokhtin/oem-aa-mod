@@ -86,7 +86,7 @@ int sem_timedwait(sem_t *sem, const struct timespec *abstime)
                       + (long)(abstime->tv_nsec - rt.tv_nsec) / 1000000L;
 
     // Verbose per-call trace: confirm the interpose is bound and show each wait's remaining time
-    // and call-site offset, so the EOS-drain site stays identifiable on-car. Compiled out entirely
+    // and call-site offset, so the EOS-drain site stays identifiable in a trace. Compiled out entirely
     // unless the shim is built at verbose level (LOG_LEVEL_VERBOSE) — the level gate is the switch,
     // no manual call counter.
     LOGV("sem_timedwait HIT: rem=%ldms retoff=0x%03lx abstime={%ld,%09ld} caller=%p",

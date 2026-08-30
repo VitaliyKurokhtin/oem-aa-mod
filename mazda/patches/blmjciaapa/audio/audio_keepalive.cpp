@@ -22,8 +22,9 @@
 // Gated by libpatch.conf `aa_audio_low_latency` (default false) — the beginning edge of the
 // same AA audio-cutoff fix as the start/head (goactive) and end/tail (sem_clockfix +
 // audio_stopdelay) halves, all under the one switch. ALSA is reached via dlopen (no build-time
-// libasound dependency). The open blocks (a cold open can take seconds), so it MUST run off the
-// loader/constructor thread.
+// libasound dependency). The open blocks (a cold open can take seconds), so it runs on its own
+// detached thread, spawned by audio_keepalive_init() from lifecycle.cpp's session bracket
+// (alongside touch/hud/play-pause) rather than from a library constructor.
 
 #ifndef _GNU_SOURCE
 #  define _GNU_SOURCE
@@ -31,8 +32,8 @@
 
 #define LOG_TAG "KEEPALIVE"
 #include "../log.h"             // LIBPATCH_NAME=blmjciaapa + common/log.h (LOG*)
-#include "common/preload_guard.h" // preload_read_cmdline / preload_is_launcher_process
-#include "common/config.h"      // libpatch_config::{load,aa_audio_low_latency}
+#include "audio_keepalive.h"    // audio_keepalive_init() (this TU defines it)
+#include "common/thread_util.h" // preload_thread_create (bounded stack)
 
 #include <dlfcn.h>
 #include <pthread.h>
@@ -44,6 +45,7 @@ struct snd_pcm_t;   // opaque
 enum { kStreamPlayback = 0, kFormatS16LE = 2, kAccessRwInterleaved = 3 };
 typedef int (*pcm_open_fn)(snd_pcm_t **, const char *, int, int);
 typedef int (*pcm_set_params_fn)(snd_pcm_t *, int, int, unsigned, unsigned, int, unsigned);
+typedef int (*pcm_close_fn)(snd_pcm_t *);
 
 // Open one dmix client and return its (intentionally leaked) handle, or nullptr on any
 // failure (fail open — the unit just behaves as stock, no warming). Opened ONCE.
@@ -57,6 +59,9 @@ snd_pcm_t *open_hold_dmix()
     }
     pcm_open_fn       pcm_open       = reinterpret_cast<pcm_open_fn>(dlsym(lib, "snd_pcm_open"));
     pcm_set_params_fn pcm_set_params = reinterpret_cast<pcm_set_params_fn>(dlsym(lib, "snd_pcm_set_params"));
+    // Only needed on the set_params failure path below; not a hard requirement
+    // (the success path never closes), so its absence doesn't block warming.
+    pcm_close_fn      pcm_close      = reinterpret_cast<pcm_close_fn>(dlsym(lib, "snd_pcm_close"));
     if (!pcm_open || !pcm_set_params) {
         LOGE("keepalive: dlsym snd_pcm_{open,set_params} incomplete");
         return nullptr;
@@ -78,7 +83,11 @@ snd_pcm_t *open_hold_dmix()
                          /*latency_us*/ 500000);
     if (err < 0) {
         LOGE("keepalive: snd_pcm_set_params failed: %d", err);
-        return nullptr;   // leak the handle; we're failing open anyway
+        // Close the just-opened client so a failed attach neither leaks the
+        // handle nor holds a slot on the shared dmix IPC. (The success path
+        // below deliberately never closes — holding it open IS the mechanism.)
+        if (pcm_close) pcm_close(pcm);
+        return nullptr;
     }
     LOGD("keepalive: holding plug:dmix_48000 open -> hw:0,0 warm (0%% CPU, no streaming); pcm=%p", pcm);
     return pcm;
@@ -91,31 +100,28 @@ void *keepalive_thread(void *)
     return nullptr;
 }
 
-// Runs at dlopen of libpatch-blmjciaapa.so (jciAAPA start). Spawns the holder on a detached
-// thread so the (potentially multi-second) cold open never blocks jciAAPA startup.
-__attribute__((constructor))
-void audio_keepalive_init()
+} // namespace  (open_hold_dmix + keepalive_thread stay TU-private)
+
+// Start the dmix warmer, once per process. Called from lifecycle.cpp's
+// aap_create_session bracket (gated on aa_audio_low_latency) — the same place
+// touch/hud/play-pause are wired, so the launcher-process detection and the
+// config gate live there instead of a duplicated constructor guard here. The
+// open can block for seconds (a cold open), so it runs on a bounded, detached
+// thread (common/thread_util.h): the 256 KiB stack bound avoids glibc's default
+// multi-MB per-thread reservation on the memory-tight CMU, and the detach keeps
+// the never-joined fire-and-forget semantics. Idempotent — repeat session edges
+// are no-ops.
+void audio_keepalive_init(void)
 {
-    // This constructor is inherited by EVERY process that gets our LD_PRELOAD, including the
-    // short-lived helper children the system spawns roughly once a second. Only run in the real
-    // service host (jciAAPA); otherwise we'd parse config, spawn a thread, dlopen libasound and
-    // race a dmix open in every throwaway child. Same guard main.cpp uses.
-    char cmdline[256];
-    preload_read_cmdline(cmdline, sizeof cmdline);
-    if (!preload_is_launcher_process(cmdline))
-        return;
+    static bool started = false;
+    if (started) return;
+    started = true;
 
-    libpatch_config::load(reinterpret_cast<const void *>(&audio_keepalive_init));
-    if (!libpatch_config::aa_audio_low_latency())
-        return;
-
-    pthread_attr_t attr;
-    pthread_attr_init(&attr);
-    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
     pthread_t t;
-    if (pthread_create(&t, &attr, keepalive_thread, nullptr) != 0)
-        LOGE("keepalive: pthread_create failed — no route keepalive");
-    pthread_attr_destroy(&attr);
+    int rc = preload_thread_create(&t, keepalive_thread, nullptr);
+    if (rc != 0) {
+        LOGE("keepalive: thread create failed (%d) — no route keepalive", rc);
+        return;
+    }
+    pthread_detach(t);
 }
-
-} // namespace
