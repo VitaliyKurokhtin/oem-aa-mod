@@ -154,7 +154,7 @@ jobs:
       upstream_tag: ${{ github.ref_name }}
       upstream_repo: ${{ github.repository }}
       installer_repo: Bijan-A/oem-aa-mod-installer
-      installer_ref: 5915bd65b66355458d301e3c274f316d5152e369
+      installer_ref: 8d28ba0c630466f75c98eadb3a888918a8f8053c
 
   publish:
     needs: build-installer
