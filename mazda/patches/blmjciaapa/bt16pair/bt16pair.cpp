@@ -50,7 +50,8 @@ constexpr char const *kDongleDevNames[] = {
     "carlink",
     "motorolama1",
     "AutoKit",
-    "Accessory"
+    "Accessory",
+    "CAR2"
 };
 
 // AapConnectionManager connect-mode values (instance + 0xdc). Offset and
