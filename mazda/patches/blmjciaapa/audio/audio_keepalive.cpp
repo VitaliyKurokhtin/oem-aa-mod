@@ -16,8 +16,8 @@
 //     there is no write loop and no recovery logic.
 //   * We run inside jciAAPA (a restart-critical service), so the surface is minimized: one
 //     detached thread does the open once (any error just fails open — no warming, no crash)
-//     then parks in pause() holding the fd. After the open there is no ongoing ALSA activity,
-//     so the steady-state fault surface is ~nil.
+//     and exits — the fd is owned by the process, not the thread, so nothing has to hold it.
+//     After the open there is no ongoing ALSA activity, so the steady-state fault surface is ~nil.
 //
 // Gated by libpatch.conf `aa_audio_low_latency` (default false) — the beginning edge of the
 // same AA audio-cutoff fix as the start/head (goactive) and end/tail (sem_clockfix +
@@ -95,8 +95,10 @@ snd_pcm_t *open_hold_dmix()
 
 void *keepalive_thread(void *)
 {
-    open_hold_dmix();          // open once; on failure, fail open (no warming)
-    for (;;) pause();          // park forever, holding the fd (near-zero fault surface)
+    // Open the dmix client once (blocking — a cold open can take seconds, hence its own thread)
+    // and return. The pcm fd is owned by the process, not this thread, so it stays open with no
+    // thread parked on it. On failure we just fail open.
+    open_hold_dmix();
     return nullptr;
 }
 

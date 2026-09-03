@@ -7,6 +7,10 @@ namespace aap_service_audio {
 
 void init();
 
+// Audio EOS-drain "tail" fix (sem_clockfix.cpp). Call once from the constructor after config load,
+// so the gate is resolved up front, not on the first sem_timedwait.
+void sem_clockfix_init();
+
 } // namespace aap_service_audio
 
 #endif // LIBPATCH_AAP_SERVICE_AUDIO_H

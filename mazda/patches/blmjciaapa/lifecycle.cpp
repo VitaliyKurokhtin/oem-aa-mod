@@ -22,6 +22,7 @@
 #include "common/config.h"
 #include "audio/audio_keepalive.h"
 #include "audio/audio_preopen.h"
+#include "audio/audio_stopdelay.h"
 #include "hud/hud.h"
 #include "bt16pair/bt16pair.h"
 #include "monitor/navi_monitor.h"
@@ -270,6 +271,12 @@ int aap_create_session(const char *cfg, void *unknown_r1,
             LOGD("aap_create_session: starting audio cold-open keepalive");
             audio_keepalive_init();
             LOGD("audio cold-open keepalive hook completed");
+
+            // End-cutoff amp hold: bring up the drain-done event + helper thread up front (same
+            // low-latency key), so the timer_settime interpose's gate is resolved here, not lazily.
+            LOGD("aap_create_session: arming audio end-cutoff amp hold");
+            audio_stopdelay_init();
+            LOGD("audio end-cutoff amp hold armed");
         } else {
             LOGD("aap_create_session: aa_audio_low_latency disabled by config — "
                   "skipping audio head pre-open + cold-open keepalive");

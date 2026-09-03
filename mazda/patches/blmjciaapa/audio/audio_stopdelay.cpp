@@ -35,16 +35,17 @@
 // detour, so none of jciAAPA's restart risk. Needs -lrt (timer_settime) and -lpthread.
 
 #ifndef _GNU_SOURCE
-#  define _GNU_SOURCE          // RTLD_NEXT via common/preload.h; dladdr via common/config.h;
+#  define _GNU_SOURCE          // RTLD_NEXT via common/preload.h;
 #endif                         // semtimedop via common/audio/drain_event.h
 
 #define LOG_TAG "STOPDELAY"
 #include "../log.h"             // LIBPATCH_NAME=blmjciaapa + common/log.h (LOG*)
 #include "common/preload.h"     // PRELOAD_EXPORT, resolve_real_symbol()
-#include "common/config.h"      // libpatch_config::{load,aa_audio_low_latency}
+#include "common/thread_util.h" // preload_thread_create (bounded-stack helper thread)
 #include "common/audio/drain_event.h" // drain_event::{open_sem,wait} — the drain-done event
                                 // (the producer owns reset(), at drain-start; see the note below)
 
+#include <atomic>
 #include <errno.h>
 #include <pthread.h>
 #include <stdint.h>
@@ -89,7 +90,11 @@ static bool            g_pending = false;   // a fresh re-arm job is waiting
 static unsigned        g_gen     = 0;       // bumped per arm; supersedes an in-flight helper job
 static timer_t         g_job_timerid;       // the OEM stop timer of the current job
 static int             g_semid   = -1;      // the drain-done SysV semaphore
-static bool            g_event_ready = false;
+// Written by audio_stopdelay_init() on the session thread, read by the interpose on OEM worker
+// threads that already exist — atomic to avoid a data race. Off => pass-through; a stale read is
+// always safe (stock pass-through, or the fixed hold).
+static std::atomic<bool> g_event_ready{false};
+static std::atomic<bool> g_enabled{false};
 
 // Helper thread: for each arm, wait for the drain-done token then make the OEM stop timer fire
 // ~immediately, so the OEM's own handler un-mixes the amp right when the tail drained.
@@ -136,32 +141,6 @@ static void *drain_helper(void *)
     }
 }
 
-// Bring up the semaphore + helper thread once. Called under g_lock from the first matched arm.
-// Returns true if the event path is usable; false => the caller uses the fixed-hold fallback.
-static bool ensure_event_machinery_locked()
-{
-    static bool tried = false;
-    if (tried)
-        return g_event_ready;
-    tried = true;
-
-    g_semid = drain_event::open_sem();
-    if (g_semid < 0)
-        return false;   // reset()/wait() already logged
-
-    pthread_t th;
-    if (pthread_create(&th, nullptr, &drain_helper, nullptr) != 0) {
-        LOGE("audio_stopdelay: pthread_create(drain_helper) failed: errno=%d -> fixed-hold "
-             "fallback", errno);
-        return false;
-    }
-    pthread_detach(th);
-    g_event_ready = true;
-    LOGD("audio_stopdelay: event-driven amp release armed (drain-done -> un-mix; %lds fail-safe)",
-         kCapSec);
-    return true;
-}
-
 extern "C" PRELOAD_EXPORT
 int timer_settime(timer_t timerid, int flags,
                   const struct itimerspec *new_value, struct itimerspec *old_value)
@@ -177,11 +156,9 @@ int timer_settime(timer_t timerid, int flags,
     if (!real)
         return -1;   // unresolved (shouldn't happen) — behave like a failed arm
 
-    static int enabled = -1;
-    if (enabled < 0) {
-        libpatch_config::load(reinterpret_cast<const void *>(&timer_settime));
-        enabled = libpatch_config::aa_audio_low_latency() ? 1 : 0;
-    }
+    // Gate is resolved in audio_stopdelay_init(), never here — no config I/O on the libc timer
+    // path. Off => pass-through.
+    const bool enabled = g_enabled.load(std::memory_order_acquire);
     if (!enabled || !new_value)
         return real(timerid, flags, new_value, old_value);
 
@@ -193,19 +170,20 @@ int timer_settime(timer_t timerid, int flags,
         new_value->it_value.tv_sec  == 0 &&
         new_value->it_value.tv_nsec == kGuidanceStopNs)
     {
-        pthread_mutex_lock(&g_lock);
-        const bool ready = ensure_event_machinery_locked();
+        // Machinery is brought up once in audio_stopdelay_init(); here we only read the flag.
+        const bool ready = g_event_ready.load(std::memory_order_acquire);
         if (ready) {
             // Do NOT reset the semaphore here. The producer (sem_clockfix) clears stale tokens
             // at drain-start, which always precedes this arm; a short prompt can finish draining
             // (and post its token) before we get here, and resetting at the arm would wipe the
             // token we're about to wait for. Just hand the job to the helper and wait.
+            pthread_mutex_lock(&g_lock);
             g_job_timerid = timerid;
             ++g_gen;
             g_pending = true;
             pthread_cond_signal(&g_cv);
+            pthread_mutex_unlock(&g_lock);
         }
-        pthread_mutex_unlock(&g_lock);
 
         struct itimerspec ext = *new_value;
         if (ready) {
@@ -228,4 +206,37 @@ int timer_settime(timer_t timerid, int flags,
         return real(timerid, flags, &ext, old_value);
     }
     return real(timerid, flags, new_value, old_value);
+}
+
+// Bring up the drain-done semaphore + persistent helper thread, once. Called from lifecycle.cpp's
+// session bracket after config load, so the gate is resolved up front (not on the first
+// timer_settime) and the matched arm is a bare flag check. On bring-up failure g_event_ready stays
+// false and the interpose falls back to the fixed hold.
+void audio_stopdelay_init(void)
+{
+    static bool started = false;
+    if (started)
+        return;
+    started = true;
+
+    g_enabled.store(true, std::memory_order_release);
+
+    // g_real_timer_settime is resolved (and published) by the interpose on its first call; the
+    // helper picks it up through the g_lock handoff, so there is nothing to resolve here.
+    g_semid = drain_event::open_sem();
+    if (g_semid < 0) {
+        LOGE("audio_stopdelay: drain-done semaphore unavailable -> fixed-hold fallback");
+        return;                       // g_event_ready stays false
+    }
+
+    pthread_t th;
+    if (preload_thread_create(&th, &drain_helper, nullptr) != 0) {   // bounded stack
+        LOGE("audio_stopdelay: preload_thread_create(drain_helper) failed: errno=%d -> "
+             "fixed-hold fallback", errno);
+        return;
+    }
+    pthread_detach(th);
+    g_event_ready.store(true, std::memory_order_release);
+    LOGD("audio_stopdelay: event-driven amp release armed (drain-done -> un-mix; %lds fail-safe)",
+         kCapSec);
 }

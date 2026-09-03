@@ -30,6 +30,7 @@ void aap_service_patch_init()
 
     if (libpatch_config::aa_audio_low_latency()) {
         aap_service_audio::init();
+        aap_service_audio::sem_clockfix_init();
     } else {
         LOGD("aa_audio_low_latency=false -> stock ALSA start threshold; "
              "audio module inert");

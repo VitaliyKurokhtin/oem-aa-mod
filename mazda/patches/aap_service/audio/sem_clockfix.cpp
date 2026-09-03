@@ -24,13 +24,12 @@
 // (clock_gettime).
 
 #ifndef _GNU_SOURCE
-#  define _GNU_SOURCE          // dladdr() via common/config.h; RTLD_NEXT via common/preload.h
+#  define _GNU_SOURCE          // semtimedop via common/audio/drain_event.h; RTLD_NEXT via common/preload.h
 #endif
 
 #define LOG_TAG "SEMFIX"
 #include "../log.h"             // LIBPATCH_NAME=aap_service + common/log.h (LOG*)
 #include "common/preload.h"     // PRELOAD_EXPORT, resolve_real_symbol()
-#include "common/config.h"      // libpatch_config::{load,aa_audio_low_latency} (opt-in gate)
 #include "common/audio/drain_event.h" // drain_event::{open_sem,post} — tell blmjciaapa the tail drained
 
 #include <semaphore.h>
@@ -49,6 +48,15 @@ static const uintptr_t kPageOffMask        = 0xFFF;
 // longer timeout set by a future firmware is left untouched.
 static const long kEosWaitSec = 3;
 
+// Set once by sem_clockfix_init() (after config load); default off => pass-through when disabled or
+// before init. Plain (not atomic): the aap_service constructor runs before any OEM audio thread
+// exists, so the write happens-before every reader via thread creation.
+static bool g_enabled = false;
+
+// Producer (drain-done) semaphore, opened once in sem_clockfix_init() so the matched EOS-drain path
+// does no semget. -1 until opened / if the open fails (drain_event::reset/post tolerate -1).
+static int g_psemid = -1;
+
 extern "C" PRELOAD_EXPORT
 int sem_timedwait(sem_t *sem, const struct timespec *abstime)
 {
@@ -60,20 +68,9 @@ int sem_timedwait(sem_t *sem, const struct timespec *abstime)
     if (!real)
         return -1;   // unresolved (shouldn't happen) — behave like a failed wait
 
-    // Opt-in gate: libpatch.conf `aa_audio_low_latency` (default false). Off => pure pass-through.
-    static int enabled = -1;
-    if (enabled < 0) {
-        libpatch_config::load(reinterpret_cast<const void *>(&sem_timedwait));
-        enabled = libpatch_config::aa_audio_low_latency() ? 1 : 0;
-        if (enabled) {
-            // Line-buffer the player's own stdout/stderr so its log timestamps reflect when
-            // audio events actually happen (it is otherwise block-buffered, which batches the
-            // timeline into clumps). Pure libc; runs once, early.
-            setvbuf(stdout, nullptr, _IOLBF, 0);
-            setvbuf(stderr, nullptr, _IOLBF, 0);
-        }
-    }
-    if (!abstime || !enabled)
+    // Gate is resolved in sem_clockfix_init() (constructor time), never here — no config I/O on
+    // the libc-wait path. Off => pass-through.
+    if (!abstime || !g_enabled)
         return real(sem, abstime);
 
     const uintptr_t ret     = reinterpret_cast<uintptr_t>(__builtin_return_address(0));
@@ -102,10 +99,7 @@ int sem_timedwait(sem_t *sem, const struct timespec *abstime)
         // reaches this drain before it reaches blmjciaapa's arm, and a short prompt can finish
         // draining (and post its token) inside that gap; resetting at drain-start clears
         // leftovers without ever wiping the token this drain is about to post.
-        static int psemid = -1;
-        if (psemid < 0)
-            psemid = drain_event::open_sem();
-        drain_event::reset(psemid);
+        drain_event::reset(g_psemid);
 
         const struct timespec *use = abstime;
         struct timespec fixed;
@@ -123,7 +117,7 @@ int sem_timedwait(sem_t *sem, const struct timespec *abstime)
         // amp-hold consumer to un-mix now. r != 0 (ETIMEDOUT at the ceiling / EINTR) => the
         // drain did not complete, so we post nothing and the consumer falls back to its cap.
         if (r == 0) {
-            drain_event::post(psemid);
+            drain_event::post(g_psemid);
             LOGD("sem_timedwait: EOS drain complete -> posted drain-done event "
                  "(amp release, event-driven); caller=%p", (void *)ret);
         }
@@ -131,3 +125,22 @@ int sem_timedwait(sem_t *sem, const struct timespec *abstime)
     }
     return real(sem, abstime);
 }
+
+namespace aap_service_audio {
+
+// Called once from the aap_service constructor, after config load, to enable the EOS-drain
+// extension. Resolving the gate here (not on the first sem_timedwait) keeps config I/O off the
+// libc-wait path, where a fault would take the whole process down.
+void sem_clockfix_init()
+{
+    g_enabled = true;
+    g_psemid  = drain_event::open_sem();   // producer sem up front, off the wait path
+#if LOG_LEVEL <= LOG_LEVEL_VERBOSE
+    // Verbose builds only: line-buffer the player's stdout/stderr so its log timestamps aren't
+    // batched into clumps. Release stdio is untouched.
+    setvbuf(stdout, nullptr, _IOLBF, 0);
+    setvbuf(stderr, nullptr, _IOLBF, 0);
+#endif
+}
+
+} // namespace aap_service_audio
