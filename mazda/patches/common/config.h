@@ -53,6 +53,12 @@
 //   bt_pairing_show_device_notification = true|false
 //                                     show the detected USB device name in a status-bar
 //                                     notification before applying the pairing gate (default false)
+//   compass_always_on = true|false    keep the instrument-cluster compass alive at all times.
+//                                     Stock it is dead below ~9 km/h, and dead at every speed once
+//                                     NVRAM bus_bcm_speed_restriction=disable (the usual
+//                                     touchscreen-while-driving tweak). Mechanism and addresses in
+//                                     patches/svcjcinavi/compass.cpp. Read by svcjcinavi
+//                                     (default false)
 //
 // Booleans are lenient (true/1/yes/on, false/0/no/off). hud_transport
 // also accepts "svcjcinavi" as an alias for "svcnavi".
@@ -239,6 +245,7 @@ struct Settings {
     bool         block_headunit_media_play = false;
     bool         bt_pairing_bypass_all_devices = false;
     bool         bt_pairing_show_device_notification = false;
+    bool         compass_always_on = false;
     bool         loaded            = false;
 };
 
@@ -296,6 +303,8 @@ inline void apply_kv(const char *key, const char *val, void *ud)
     } else if (strcasecmp(key, "bt_pairing_show_device_notification") == 0) {
         s.bt_pairing_show_device_notification =
             parse_bool(val, s.bt_pairing_show_device_notification);
+    } else if (strcasecmp(key, "compass_always_on") == 0) {
+        s.compass_always_on = parse_bool(val, s.compass_always_on);
     } else {
         // Common schema: a key this library doesn't act on is not an
         // error, just informational.
@@ -311,7 +320,7 @@ inline void log_effective(const char *prefix)
             "mute_pauses_phone=%s "
             "unmute_starts_playback=%s "
             "block_headunit_media_play=%s bt_pairing_bypass_all_devices=%s "
-            "bt_pairing_show_device_notification=%s",
+            "bt_pairing_show_device_notification=%s compass_always_on=%s",
          prefix,
          s.touch ? "true" : "false",
          s.hud   ? "true" : "false",
@@ -324,7 +333,8 @@ inline void log_effective(const char *prefix)
          s.unmute_starts_playback ? "true" : "false",
          s.block_headunit_media_play ? "true" : "false",
          s.bt_pairing_bypass_all_devices ? "true" : "false",
-         s.bt_pairing_show_device_notification ? "true" : "false");
+         s.bt_pairing_show_device_notification ? "true" : "false",
+         s.compass_always_on ? "true" : "false");
 }
 
 // === Public API ===============================================
@@ -372,6 +382,7 @@ inline bool         unmute_starts_playback() { return settings().unmute_starts_p
 inline bool         block_headunit_media_play() { return settings().block_headunit_media_play; }
 inline bool         bt_pairing_bypass_all_devices() { return settings().bt_pairing_bypass_all_devices; }
 inline bool         bt_pairing_show_device_notification() { return settings().bt_pairing_show_device_notification; }
+inline bool         compass_always_on() { return settings().compass_always_on; }
 
 } // namespace libpatch_config
 
