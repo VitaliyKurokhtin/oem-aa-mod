@@ -196,6 +196,121 @@ int main()
         CHECK_EQ_U(n_g, 1, "no dispatch after sink detach");
     }
 
+    // =========================================================================
+    // ROUNDABOUT GLYPHS
+    //
+    // The roundabout maneuver types state their own circulation direction, so
+    // the glyph bank is picked from the wire and never guessed:
+    //   32/33 = clockwise        -> bank base 49 (left-hand traffic)
+    //   34/35 = counterclockwise -> bank base 37 (right-hand traffic)
+    // Within a bank the glyph is the circulation angle in 30-degree steps,
+    // index = round(angle / 30); the angle increments in the driving direction
+    // for BOTH banks, so the index is handedness-independent.
+    // =========================================================================
+
+    // --- REGRESSION: the angle-bearing types (33/35) --------------------------
+    // These four (exit_number, angle) pairs are the ones real captures contain,
+    // and this mapping is road-validated. It must not change.
+    {
+        printf("[7] regression: angle present -> unchanged fan-out\n");
+        struct Case { const char *hex; unsigned exp_glyph; const char *msg; };
+        static const Case kC[] = {
+            // 0a NN = step; 0a 07 = maneuver{ type, exit_number, angle }
+            {"80 06 0a 09 0a 07 08 23 10 02 18 87 01", 42, "CCW angle 135 -> 42"},
+            {"80 06 0a 09 0a 07 08 23 10 02 18 b4 01", 43, "CCW angle 180 -> 43"},
+            {"80 06 0a 09 0a 07 08 23 10 03 18 e1 01", 45, "CCW angle 225 -> 45"},
+            {"80 06 0a 09 0a 07 08 23 10 03 18 8e 02", 46, "CCW angle 270 -> 46"},
+            // the legitimate "back out the entry" U-turn: angle 360 -> index 0
+            {"80 06 0a 09 0a 07 08 23 10 02 18 e8 02", 37, "CCW angle 360 -> 37 (U-turn)"},
+            // clockwise bank, same index arithmetic
+            {"80 06 0a 09 0a 07 08 21 10 02 18 b4 01", 55, "CW  angle 180 -> 55"},
+        };
+        for (unsigned i = 0; i < sizeof(kC)/sizeof(kC[0]); ++i) {
+            auto s = hx(kC[i].hex);
+            AaGuidance g;
+            hud_nav16_on_frame(s.data(), (int)s.size(), &g, nullptr);
+            CHECK_EQ_U(hud_nav16_glyph(&g), kC[i].exp_glyph, kC[i].msg);
+        }
+    }
+
+    // --- REGRESSION: plain turns keep their table glyph ----------------------
+    // A stale roundabout_exit_number rides along on the plain-turn steps that
+    // follow a roundabout, so it must never turn a turn into a roundabout.
+    {
+        printf("[8] regression: plain turns unaffected by a stale exit_number\n");
+        auto a = hx("80 06 0a 06 0a 04 08 08 10 02");   // TURN_NORMAL_RIGHT + exit 2
+        AaGuidance g;
+        hud_nav16_on_frame(a.data(), (int)a.size(), &g, nullptr);
+        CHECK_EQ_U(g.maneuver_type, 8u, "maneuver_type");
+        CHECK_EQ_U(hud_nav16_glyph(&g), 3u, "TURN_NORMAL_RIGHT -> HUD_RIGHT (3)");
+        auto b = hx("80 06 0a 06 0a 04 08 07 10 02");   // TURN_NORMAL_LEFT + exit 2
+        hud_nav16_on_frame(b.data(), (int)b.size(), &g, nullptr);
+        CHECK_EQ_U(hud_nav16_glyph(&g), 2u, "TURN_NORMAL_LEFT -> HUD_LEFT (2)");
+    }
+
+    // --- NEW: angle absent -> estimate the angle from the exit number --------
+    // Senders that use the non-WITH_ANGLE roundabout types (32/34) give only an
+    // exit number. Exit N of an E-arm roundabout sits at 360*N/E, so with E
+    // unknown the angle is estimated as the value minimising expected error
+    // over the arm-count distribution: 90, 180, 270, 270, 300, 300 for N=1..6
+    // (it saturates because a 4th exit implies at least 5 arms).
+    {
+        printf("[9] angle absent -> exit-number estimate\n");
+        // real captured frame: type 34, exit 2, no angle, road+cue "422"
+        auto real = hx("80 06 0a 14 0a 04 08 22 10 02"
+                       " 12 05 0a 03 34 32 32 22 05 0a 03 34 32 32");
+        AaGuidance g;
+        hud_nav16_on_frame(real.data(), (int)real.size(), &g, nullptr);
+        CHECK_EQ_U(g.maneuver_type, 34u, "maneuver_type (RA_ENTER_EXIT_CCW)");
+        CHECK_EQ_U(g.roundabout_exit_number, 2, "roundabout_exit_number");
+        CHECK_EQ_S(g.road, "422", "road");
+        CHECK_EQ_U(hud_nav16_glyph(&g), 43u, "real frame: exit 2 -> 43 (was 37)");
+
+        struct Case { const char *hex; unsigned exp; const char *msg; };
+        static const Case kC[] = {
+            {"80 06 0a 06 0a 04 08 22 10 01", 40, "CCW exit 1 ->  90deg -> 40"},
+            {"80 06 0a 06 0a 04 08 22 10 02", 43, "CCW exit 2 -> 180deg -> 43"},
+            {"80 06 0a 06 0a 04 08 22 10 03", 46, "CCW exit 3 -> 270deg -> 46"},
+            {"80 06 0a 06 0a 04 08 22 10 04", 46, "CCW exit 4 -> 270deg -> 46"},
+            {"80 06 0a 06 0a 04 08 22 10 05", 47, "CCW exit 5 -> 300deg -> 47"},
+            {"80 06 0a 06 0a 04 08 22 10 06", 47, "CCW exit 6 -> 300deg -> 47"},
+            {"80 06 0a 06 0a 04 08 22 10 09", 47, "CCW exit 9 -> clamped -> 47"},
+            {"80 06 0a 06 0a 04 08 20 10 01", 52, "CW  exit 1 ->  90deg -> 52"},
+            {"80 06 0a 06 0a 04 08 20 10 02", 55, "CW  exit 2 -> 180deg -> 55"},
+            {"80 06 0a 06 0a 04 08 20 10 03", 58, "CW  exit 3 -> 270deg -> 58"},
+        };
+        for (unsigned i = 0; i < sizeof(kC)/sizeof(kC[0]); ++i) {
+            auto s = hx(kC[i].hex);
+            hud_nav16_on_frame(s.data(), (int)s.size(), &g, nullptr);
+            CHECK_EQ_U(hud_nav16_glyph(&g), kC[i].exp, kC[i].msg);
+        }
+    }
+
+    // --- NEW: neither angle nor exit number ---------------------------------
+    // Nothing directional on the wire. Fall back to the straight-through
+    // position rather than index 0, which means "back out the entry".
+    {
+        printf("[10] neither angle nor exit number -> straight through\n");
+        auto s = hx("80 06 0a 04 0a 02 08 22");        // type 34 alone
+        AaGuidance g;
+        hud_nav16_on_frame(s.data(), (int)s.size(), &g, nullptr);
+        CHECK_EQ_U(g.roundabout_exit_number, 0, "exit_number absent -> 0");
+        CHECK_EQ_U(hud_nav16_glyph(&g), 43u, "CCW no data -> 180deg -> 43");
+        auto t = hx("80 06 0a 04 0a 02 08 20");        // type 32 alone
+        hud_nav16_on_frame(t.data(), (int)t.size(), &g, nullptr);
+        CHECK_EQ_U(hud_nav16_glyph(&g), 55u, "CW  no data -> 180deg -> 55");
+    }
+
+    // --- NEW: an exit number must never override a real angle ---------------
+    {
+        printf("[11] angle wins over exit number\n");
+        // exit 1 (estimate 90 -> 40) but a real angle of 180 -> must be 43
+        auto s = hx("80 06 0a 09 0a 07 08 22 10 01 18 b4 01");
+        AaGuidance g;
+        hud_nav16_on_frame(s.data(), (int)s.size(), &g, nullptr);
+        CHECK_EQ_U(hud_nav16_glyph(&g), 43u, "angle 180 beats exit-1 estimate");
+    }
+
     printf("\n%s\n", g_fail ? "RESULT: FAIL" : "RESULT: PASS");
     return g_fail;
 }

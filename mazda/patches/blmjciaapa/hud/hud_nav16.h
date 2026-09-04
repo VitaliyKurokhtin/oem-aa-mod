@@ -27,8 +27,16 @@ struct AaLane {
 struct AaGuidance {
     bool     have_maneuver;
     uint32_t maneuver_type;            // NavigationManeuver.NavigationType, 0..42
-    int32_t  roundabout_exit_number;   // field 2 — meaningful for ROUNDABOUT_*
-    int32_t  roundabout_exit_angle;    // field 3 — degrees; selects the roundabout glyph
+    int32_t  roundabout_exit_number;   // field 2 — 1-based, in circulation order;
+                                       // 0 when absent (see have_exit_number)
+    bool     have_exit_number;         // field 2 was on the wire
+    int32_t  roundabout_exit_angle;    // field 3 — degrees from the entry, increasing in
+                                       // the driving direction; 0 when absent
+    bool     have_exit_angle;          // field 3 was on the wire. Needed because an
+                                       // absent angle and a real 0 are otherwise
+                                       // indistinguishable, and they mean different
+                                       // things: the protocol's angle range is
+                                       // (0, 360], so 0 only ever means "not sent"
     char     road[64];                 // NavigationRoad.name (UTF-8)
     int      n_steps;                  // total steps present (diagnostic)
     int      n_lanes;                  // lanes on step[0] (0..8)
