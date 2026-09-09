@@ -20,6 +20,9 @@
 #include "log.h"
 #include "lifecycle.h"
 #include "common/config.h"
+#include "audio/audio_keepalive.h"
+#include "audio/audio_preopen.h"
+#include "audio/audio_stopdelay.h"
 #include "hud/hud.h"
 #include "bt16pair/bt16pair.h"
 #include "monitor/navi_monitor.h"
@@ -245,6 +248,38 @@ int aap_create_session(const char *cfg, void *unknown_r1,
         } else {
             LOGD("aap_create_session: mute_pauses_phone disabled by config — "
                   "skipping play/pause watcher");
+        }
+
+        // AA guidance head pre-open: install the once-per-process entry detour
+        // on AudioManager::SendReplyRequestFocus so the amp's NAVI mix opens at
+        // the OEM's own duck-grant (ahead of its late stream-start focus
+        // request), keeping the head of a guidance prompt from being clipped.
+        // The install is idempotent, so running it on the same session edge as
+        // the other post-create hooks is safe; blmjciaapa.so is confirmed
+        // mapped by this point (the constructor is too early). Gated on the
+        // shared low-latency key.
+        if (libpatch_config::aa_audio_low_latency()) {
+            LOGD("aap_create_session: installing audio head pre-open detour");
+            audio_preopen_post_aap_create_session();
+            LOGD("audio head pre-open hook completed");
+
+            // Cold-open keepalive: hold the shared dmix client open so the first
+            // guidance prompt over a tuner doesn't pay the multi-second cold open
+            // of the hw:0,0 slave. Once-per-process (idempotent); the holder does
+            // the blocking open on its own thread, so this call doesn't stall
+            // session bring-up. Same low-latency key.
+            LOGD("aap_create_session: starting audio cold-open keepalive");
+            audio_keepalive_init();
+            LOGD("audio cold-open keepalive hook completed");
+
+            // End-cutoff amp hold: bring up the drain-done event + helper thread up front (same
+            // low-latency key), so the timer_settime interpose's gate is resolved here, not lazily.
+            LOGD("aap_create_session: arming audio end-cutoff amp hold");
+            audio_stopdelay_init();
+            LOGD("audio end-cutoff amp hold armed");
+        } else {
+            LOGD("aap_create_session: aa_audio_low_latency disabled by config — "
+                  "skipping audio head pre-open + cold-open keepalive");
         }
 
 #if defined(DEBUG) && BLMJCIAAPA_ENABLE_NAVI_MONITOR

@@ -194,6 +194,7 @@ case-insensitive.
 | `force_street_name` | `true` / `false` | `false` | Force the Android Auto street name onto the HUD street line even where the OEM blanks it (see the EU note below). |
 | `hud_fold_latin` | `true` / `false` | `true` | Fold HUD-unrenderable precomposed Latin letters in street names to their base forms (see the note below). |
 | `use_protocol_v1_6` | `true` / `false` | `false` | Advertise Android Auto GAL 1.6 so the phone sends the 1.6 navigation protocol (maneuver / lanes / distance) for the HUD. Read by the `aap_service` shim; requires it to be preloaded (see the note below). |
+| `aa_audio_low_latency` | `true` / `false` | `false` | Fix Android Auto guidance-audio clipping at the head, beginning, and tail of prompts — one switch for the whole audio-cutoff fix. Needs **both** the `aap_service` and `blmjciaapa` shims preloaded (see the note below). |
 
 Booleans are lenient — `true`/`1`/`yes`/`on` and `false`/`0`/`no`/`off`
 are all accepted.
@@ -255,10 +256,35 @@ the street, so it is safe to enable everywhere if preferred.
   Lane guidance is part of the 1.6 protocol, so it is sent automatically
   whenever `use_protocol_v1_6 = true` (and never at stock 1.5).
 
+- **`aa_audio_low_latency`** fixes Android Auto **guidance-audio clipping** — one
+  opt-in switch covering all three edges of a spoken prompt. It is `false` by default
+  because it touches the live audio path; off, the unit behaves stock.
+
+  - **Head / start** — AA playback's per-client ALSA start threshold is lowered from the
+    full negotiated buffer to one period, and the guidance pipeline self-activates after a
+    short pre-roll, so dense / back-to-back prompts don't clip their first few
+    milliseconds.
+  - **Beginning / cold open** — one silent `dmix` client is held open inside `jciAAPA`
+    (0 % CPU — it streams nothing, just holds the fd) so the shared `hw:0,0` output device
+    stays warm. Without it the first prompt over a tuner (FM / DAB) pays a multi-second
+    cold open and loses its opening; because a tuner never keeps that device open, the
+    cost otherwise recurs on *every* prompt.
+  - **Tail / end** — the too-short end-of-stream drain wait is extended so the tail plays
+    out instead of being flushed, and the amplifier mix is held until the drain actually
+    finishes (coupled by a cross-process "tail drained" event), so the amp releases exactly
+    when the audio ends rather than after a guessed delay — no chopped last syllable, no
+    dead-air.
+
+  The head/start and tail/end halves live in the `aap_service` shim (`audio.cpp`,
+  `goactive.cpp`, `sem_clockfix.cpp`); the beginning cold-open and amp-hold halves live in
+  `blmjciaapa` (`audio_keepalive.cpp`, `audio_stopdelay.cpp`). So it needs **both** shims
+  preloaded (step 2). Every piece is gated by this one key — there is no separate audio
+  switch.
+
 After editing `libpatch.conf`, restart the affected service(s) —
 `jciAAPA`, `jcinavi` if you patched it, and `aap_service` if you enabled
-`use_protocol_v1_6` — or reboot for the change to take effect. The config is read
-once at library load.
+`use_protocol_v1_6` or `aa_audio_low_latency` — or reboot for the change to take effect.
+The config is read once at library load.
 
 ## Uninstall / disable
 

@@ -97,6 +97,14 @@ int   AudioManager_IsAAMediaInPlaying(void *self);
 int   RaceAap_SendTouchInput(void *self, AAP_TouchEvent *evt);
 int   RaceAap_SendKeyInput(void *self, AAP_KeyEvent *evt);
 
+// Runtime address of AudioManager::SendReplyRequestFocus inside the mapped
+// blmjciaapa.so — the OEM method that grants the guidance audio-focus reply.
+// Unlike the thunks above this returns the ADDRESS (the caller installs an
+// entry detour on it), not a callable forward. nullptr if blmjciaapa.so isn't
+// mapped (wrong PID) or the anchor isn't resolvable yet. Used by the audio
+// head pre-open (audio_preopen.cpp).
+void *AudioManager_SendReplyRequestFocus_addr(void);
+
 // AapConnectionManager access, used by the wireless GAL-1.6 BT-pairing
 // bypass (bt16pair/). The AapConnectionManager is a subobject of the
 // AapProc singleton at AapProc+0x98 (= AapProc::GetAapConnectionManager,
