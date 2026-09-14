@@ -23,6 +23,9 @@
 //                                     street even where the OEM blanks it (default false)
 //   hud_fold_latin = true|false       fold HUD-unrenderable precomposed Latin
 //                                     street-name letters to their base forms (default true)
+//   hud_maneuver_max_distance_m = N   hide AA maneuver/street/lanes until the next
+//                                     maneuver is within N meters; integer value;
+//                                     0 disables the filter (default 0)
 //   use_protocol_v1_6 = true|false    advertise Android Auto GAL 1.6 so the phone sends the
 //                                     1.6 navigation protocol (maneuver / lanes / distance)
 //                                     instead of the 1.5 turn events; read by aap_service
@@ -74,6 +77,7 @@
 #include <dlfcn.h>
 #include <limits.h>    // PATH_MAX
 #include <stddef.h>
+#include <stdlib.h>    // strtoul
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>   // strcasecmp
@@ -208,6 +212,18 @@ inline bool parse_file(const char *path,
 //   true  / 1 / yes / on  -> true
 //   false / 0 / no  / off -> false
 //   anything else         -> deflt
+inline uint32_t parse_nonnegative_meters(const char *val, uint32_t deflt)
+{
+    if (val == nullptr || *val == '\0' || *val == '-') return deflt;
+    char *end = nullptr;
+    unsigned long meters = strtoul(val, &end, 10);
+    if (end == val || *end != '\0') return deflt;
+    // A threshold above 1000 km is not useful. Clamp absurd values rather than
+    // carrying unexpectedly large configuration values into the HUD path.
+    if (meters > 1000000UL) meters = 1000000UL;
+    return static_cast<uint32_t>(meters);
+}
+
 inline bool parse_bool(const char *val, bool deflt)
 {
     if (val == nullptr) {
@@ -232,6 +248,7 @@ struct Settings {
     HudTransport hud_transport     = HUD_TRANSPORT_SVCNAVI;
     bool         force_street_name = false;
     bool         hud_fold_latin    = true;
+    uint32_t     hud_maneuver_max_distance_m = 0;
     bool         use_protocol_v1_6 = false;
     bool         aa_audio_low_latency = false;
     bool         mute_pauses_phone = true;
@@ -279,6 +296,9 @@ inline void apply_kv(const char *key, const char *val, void *ud)
         s.force_street_name = parse_bool(val, s.force_street_name);
     } else if (strcasecmp(key, "hud_fold_latin") == 0) {
         s.hud_fold_latin = parse_bool(val, s.hud_fold_latin);
+    } else if (strcasecmp(key, "hud_maneuver_max_distance_m") == 0) {
+        s.hud_maneuver_max_distance_m =
+            parse_nonnegative_meters(val, s.hud_maneuver_max_distance_m);
     } else if (strcasecmp(key, "use_protocol_v1_6") == 0) {
         s.use_protocol_v1_6 = parse_bool(val, s.use_protocol_v1_6);
     } else if (strcasecmp(key, "aa_audio_low_latency") == 0) {
@@ -307,7 +327,8 @@ inline void log_effective(const char *prefix)
 {
     const Settings &s = settings();
     LOGD("config: %s touch=%s hud=%s hud_transport=%s force_street_name=%s "
-            "hud_fold_latin=%s use_protocol_v1_6=%s aa_audio_low_latency=%s "
+            "hud_fold_latin=%s hud_maneuver_max_distance_m=%u "
+            "use_protocol_v1_6=%s aa_audio_low_latency=%s "
             "mute_pauses_phone=%s "
             "unmute_starts_playback=%s "
             "block_headunit_media_play=%s bt_pairing_bypass_all_devices=%s "
@@ -318,6 +339,7 @@ inline void log_effective(const char *prefix)
          transport_name(s.hud_transport),
          s.force_street_name ? "true" : "false",
          s.hud_fold_latin ? "true" : "false",
+         static_cast<unsigned>(s.hud_maneuver_max_distance_m),
          s.use_protocol_v1_6 ? "true" : "false",
          s.aa_audio_low_latency ? "true" : "false",
          s.mute_pauses_phone ? "true" : "false",
@@ -365,6 +387,7 @@ inline bool         hud_enabled()    { return settings().hud; }
 inline HudTransport hud_transport()  { return settings().hud_transport; }
 inline bool         force_street_name() { return settings().force_street_name; }
 inline bool         hud_fold_latin() { return settings().hud_fold_latin; }
+inline uint32_t     hud_maneuver_max_distance_m() { return settings().hud_maneuver_max_distance_m; }
 inline bool         use_protocol_v1_6() { return settings().use_protocol_v1_6; }
 inline bool         aa_audio_low_latency() { return settings().aa_audio_low_latency; }
 inline bool         mute_pauses_phone() { return settings().mute_pauses_phone; }

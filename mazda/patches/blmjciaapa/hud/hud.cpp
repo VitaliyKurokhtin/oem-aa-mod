@@ -136,6 +136,31 @@ inline void hud_tx_distance(int32_t disp_dist, uint32_t disp_unit)
     g_tx->distance(disp_dist / 100, map_distance_unit(disp_unit));
 }
 
+inline bool hud_distance_filter_enabled()
+{
+    return libpatch_config::hud_maneuver_max_distance_m() != 0;
+}
+
+inline bool hud_distance_within_limit(int32_t meters)
+{
+    const uint32_t limit = libpatch_config::hud_maneuver_max_distance_m();
+    if (limit == 0) return true;
+    if (meters < 0) return false;
+    return static_cast<uint32_t>(meters) <= limit;
+}
+
+// Hide only the Android Auto guidance block. Do not send a navigation STOP:
+// that would affect ownership/coexistence in the OEM navigation path, while
+// this feature only needs the AA maneuver/street/distance/lanes to be blank
+// until the configured distance is reached.
+inline void hud_tx_blank_guidance()
+{
+    static const uint8_t kNoLanes[HUD_NAV16_MAX_LANES] = {};
+    g_tx->next_turn("", HUD_BLANK);
+    g_tx->distance(0, 0);
+    g_tx->lanes(kNoLanes);
+}
+
 // cb_list shape: 19 word slots, total 76 bytes. The SDK memcpy's
 // all 76 bytes into the session handle at handle+0x20 inside
 // aap_create_session.
@@ -374,6 +399,68 @@ const char *nav_distance_unit_name(uint32_t v)
     }
 }
 
+// GAL 1.5 sends the maneuver (0x501) and its distance (0x502) separately.
+// When the optional distance gate is active, keep the newest turn locally and
+// wait for a distance belonging to that turn before exposing it. This prevents
+// a newly announced far-away maneuver from briefly appearing with the previous
+// maneuver's last distance.
+struct LegacyTurnState {
+    bool     have;
+    uint32_t road_len;
+    char     road[256];
+    uint32_t side;
+    uint32_t event;
+    int32_t  angle;
+    int32_t  number;
+};
+
+static LegacyTurnState g_legacy_turn;
+static bool g_legacy_visible = false;
+
+void legacy_filter_reset()
+{
+    memset(&g_legacy_turn, 0, sizeof(g_legacy_turn));
+    g_legacy_visible = false;
+}
+
+bool legacy_turn_same(const NextTurnHdr *t, uint32_t event)
+{
+    if (!g_legacy_turn.have) return false;
+    size_t road_len = (t->road_name && t->road_name_len) ? t->road_name_len : 0;
+    if (road_len >= sizeof(g_legacy_turn.road)) road_len = sizeof(g_legacy_turn.road) - 1;
+    return g_legacy_turn.side == t->turn_side &&
+           g_legacy_turn.event == event &&
+           g_legacy_turn.angle == t->turn_angle &&
+           g_legacy_turn.number == t->turn_number &&
+           g_legacy_turn.road_len == road_len &&
+           (road_len == 0 || memcmp(g_legacy_turn.road, t->road_name, road_len) == 0);
+}
+
+void legacy_store_turn(const NextTurnHdr *t, uint32_t event)
+{
+    g_legacy_turn.have   = true;
+    g_legacy_turn.side   = t->turn_side;
+    g_legacy_turn.event  = event;
+    g_legacy_turn.angle  = t->turn_angle;
+    g_legacy_turn.number = t->turn_number;
+    g_legacy_turn.road_len = 0;
+    g_legacy_turn.road[0] = '\0';
+    if (t->road_name && t->road_name_len) {
+        size_t n = t->road_name_len;
+        if (n >= sizeof(g_legacy_turn.road)) n = sizeof(g_legacy_turn.road) - 1;
+        memcpy(g_legacy_turn.road, t->road_name, n);
+        g_legacy_turn.road[n] = '\0';
+        g_legacy_turn.road_len = static_cast<uint32_t>(n);
+    }
+}
+
+void legacy_emit_cached_turn()
+{
+    if (!g_legacy_turn.have) return;
+    hud_tx_next_turn(g_legacy_turn.road, g_legacy_turn.side, g_legacy_turn.event,
+                     g_legacy_turn.angle, g_legacy_turn.number);
+}
+
 // Forward declaration so substitute_nav_cb() below can take its
 // address before the body is seen.
 void our_nav_cb(void *user_ctx, void *hdr36);
@@ -475,6 +562,7 @@ void our_nav_cb(void *user_ctx, void *hdr36)
     case kTagStatus: {
         const StatusHdr *s = static_cast<const StatusHdr *>(hdr36);
         dump_status(s);
+        if (hud_distance_filter_enabled()) legacy_filter_reset();
         hud_tx_status(s->status);
         break;
     }
@@ -482,14 +570,44 @@ void our_nav_cb(void *user_ctx, void *hdr36)
         const NextTurnHdr *t = static_cast<const NextTurnHdr *>(hdr36);
         const uint32_t turn_event = decode_turn_event(t->turn_event);
         dump_next_turn(t, turn_event);
-        hud_tx_next_turn(t->road_name, t->turn_side, turn_event,
-                         t->turn_angle, t->turn_number);
+        if (!hud_distance_filter_enabled()) {
+            hud_tx_next_turn(t->road_name, t->turn_side, turn_event,
+                             t->turn_angle, t->turn_number);
+            break;
+        }
+
+        const bool changed = !legacy_turn_same(t, turn_event);
+        legacy_store_turn(t, turn_event);
+        if (changed) {
+            if (g_legacy_visible) hud_tx_blank_guidance();
+            g_legacy_visible = false;
+        } else if (g_legacy_visible) {
+            legacy_emit_cached_turn();
+        }
         break;
     }
     case kTagDistance: {
         const DistanceHdr *d = static_cast<const DistanceHdr *>(hdr36);
         dump_distance(d);
+        if (!hud_distance_filter_enabled()) {
+            hud_tx_distance(d->display_distance, d->display_distance_unit);
+            break;
+        }
+
+        // A distance without a cached maneuver cannot be associated safely.
+        // Wait for the next turn + distance pair instead of showing a number by
+        // itself or applying it to stale guidance.
+        if (!g_legacy_turn.have) break;
+
+        if (!hud_distance_within_limit(d->distance)) {
+            if (g_legacy_visible) hud_tx_blank_guidance();
+            g_legacy_visible = false;
+            break;
+        }
+
+        if (!g_legacy_visible) legacy_emit_cached_turn();
         hud_tx_distance(d->display_distance, d->display_distance_unit);
+        g_legacy_visible = true;
         break;
     }
     default:
@@ -587,8 +705,10 @@ struct AaNav16HudState {
 };
 
 static AaNav16HudState g_nav16_acc;   // merged guidance (zero-init: gap-free memcmp)
-static AaNav16HudState g_nav16_last;  // last frame fed to the transport (change-gate)
+static AaNav16HudState g_nav16_last;  // last DISPLAYED frame fed to the transport
 static bool g_nav16_have_last = false;
+static bool g_nav16_step_distance_known = false;
+static int32_t g_nav16_step_meters = 0;
 
 // Reset the accumulator + change-gate. Owned by the rx lifecycle: called from
 // hud_nav16_rx_start() BEFORE the receiver thread exists (the only other
@@ -600,6 +720,8 @@ void hud_feed_nav16_reset(void)
 {
     memset(&g_nav16_acc, 0, sizeof(g_nav16_acc));
     g_nav16_have_last = false;
+    g_nav16_step_distance_known = false;
+    g_nav16_step_meters = 0;
     LOGV("nav: accumulator + change-gate reset");
 }
 
@@ -609,19 +731,26 @@ void hud_feed_nav16_reset(void)
 // position callbacks (both mutate g_nav16_acc, then ask to emit).
 static void nav16_emit_if_changed()
 {
-    AaNav16HudState &acc = g_nav16_acc;
-    if (g_nav16_have_last && memcmp(&acc, &g_nav16_last, sizeof(acc)) == 0) return;
-    // acc holds Mazda-domain values (resolved glyph, folded road, value*10
-    // distance in the Mazda unit) plus the decoded lanes; we encode the lanes to
-    // OEM codes here (each transport maps code->glyph on its own wire as needed).
-    // The rx thread is the sole writer under v1.6, so the transport's snapshot
-    // merge is race-free.
+    AaNav16HudState display = g_nav16_acc;
+
+    // The 1.6 protocol carries the exact next-step distance in meters. Gate the
+    // complete AA guidance block, not only the number, so a far-away maneuver
+    // does not occupy the HUD. A newly received maneuver remains hidden until
+    // its first matching position frame arrives, avoiding use of stale distance
+    // from the previous step.
+    const bool filtered = hud_distance_filter_enabled() &&
+                          (!g_nav16_step_distance_known ||
+                           !hud_distance_within_limit(g_nav16_step_meters));
+    if (filtered) memset(&display, 0, sizeof(display));
+
+    if (g_nav16_have_last && memcmp(&display, &g_nav16_last, sizeof(display)) == 0) return;
+
     uint8_t lane_codes[HUD_NAV16_MAX_LANES];
-    nav16_encode_lane_codes(acc.lanes, acc.n_lanes, lane_codes);
-    g_tx->next_turn(acc.road, acc.glyph);
-    g_tx->distance(acc.dist_dec, acc.dist_unit);
+    nav16_encode_lane_codes(display.lanes, display.n_lanes, lane_codes);
+    g_tx->next_turn(display.road, display.glyph);
+    g_tx->distance(display.dist_dec, display.dist_unit);
     g_tx->lanes(lane_codes);
-    g_nav16_last      = acc;
+    g_nav16_last      = display;
     g_nav16_have_last = true;
 }
 
@@ -658,6 +787,8 @@ static void nav16_on_guidance(const AaGuidance *g)
     if (glyph != acc.glyph || strcmp(road, acc.road) != 0) {
         acc.dist_dec  = 0;
         acc.dist_unit = 0;
+        g_nav16_step_distance_known = false;
+        g_nav16_step_meters = 0;
     }
     acc.glyph = glyph;
     strncpy(acc.road, road, sizeof(acc.road) - 1);
@@ -684,6 +815,8 @@ static void nav16_on_position(const AaPosition *p)
     if (unit > 5) unit = 0;                             // clamp untrusted unit
     g_nav16_acc.dist_unit = unit;
     g_nav16_acc.dist_dec  = quantize_dist_x10(parse_dist_x10(p->step_display), unit);
+    g_nav16_step_meters = p->step_meters;
+    g_nav16_step_distance_known = (p->step_meters >= 0);
     nav16_emit_if_changed();
 }
 
@@ -708,6 +841,7 @@ static void nav16_on_status(const AaStatus *s)
 void hud_post_aap_create_session(void)
 {
     hud_tx_start();
+    if (hud_distance_filter_enabled()) legacy_filter_reset();
     // Start the GAL 1.6 receiver only when that protocol is enabled — otherwise
     // the aap_service shim never sends and the socket would idle for nothing.
     // rx_start registers our decode callbacks before spawning the thread, so the
