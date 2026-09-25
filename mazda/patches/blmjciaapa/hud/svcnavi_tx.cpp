@@ -85,6 +85,15 @@ std::atomic<bool>       g_stop{false};
 pthread_t g_sender_thread    = 0;
 bool      g_sender_thread_up = false;
 
+// Reset the last HUD snapshot before a new sender session starts.
+// If the previous trip left a road name / icon behind, a reconnect can
+// display stale guidance until the next nav event arrives.
+void reset_sender_state()
+{
+    std::memset(&g_snapshot, 0, sizeof(g_snapshot));
+    g_seq.store(0, std::memory_order_release);
+}
+
 void *g_conn = nullptr;
 
 // Append one INT32 to the open iterator. Returns false on OOM.
@@ -288,6 +297,7 @@ void note_inactive_drop(const char *which)
 
 } // namespace
 
+    reset_sender_state();
 // === Lifecycle (called from hud.cpp via the transport dispatch) ===
 
 void svcnavi_tx_start(void)
@@ -297,6 +307,7 @@ void svcnavi_tx_start(void)
         return;
     }
 
+    reset_sender_state();
     g_stop.store(false, std::memory_order_release);
     g_active.store(false, std::memory_order_release);
 

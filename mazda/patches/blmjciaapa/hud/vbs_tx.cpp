@@ -102,6 +102,15 @@ std::atomic<bool>      g_stop{false};     // stop requested: sender thread shoul
 pthread_t g_sender_thread       = 0;
 bool      g_sender_thread_up    = false;
 
+// Reset the last HUD snapshot before a new sender session starts.
+// If the previous trip left a road name / icon behind, a reconnect can
+// display stale guidance until the next nav event arrives.
+void reset_sender_state()
+{
+    std::memset(&g_snapshot, 0, sizeof(g_snapshot));
+    g_seq.store(0, std::memory_order_release);
+}
+
 // === OEM connection state =====================================
 //
 // The connection handle is created and owned by the sender thread
@@ -484,6 +493,11 @@ void vbs_tx_start(void)
         LOGD("vbs_tx_start: already running");
         return;
     }
+
+    // Reconnects need a clean slate: if we don't zero the snapshot and the
+    // seqlock counter, the sender can keep replaying the previous route's
+    // guidance until a new nav event arrives.
+    reset_sender_state();
 
     // Keep session start cheap: spawn the sender thread and return
     // immediately. ALL D-Bus work — dispatcher init, the synchronous
