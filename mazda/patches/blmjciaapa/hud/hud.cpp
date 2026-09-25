@@ -28,6 +28,7 @@
 #include "translit.h"   // hud_translit::fold() — precomposed-Latin street-name fold
 #include "hud_nav.h"    // compute_turn_icon() — AA turn fields -> Mazda HUD glyph
 #include "hud_lane.h"   // oem_lane_code_for_aa — AA lanes -> OEM lane codes
+#include "common/string_safe.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -482,7 +483,21 @@ void our_nav_cb(void *user_ctx, void *hdr36)
         const NextTurnHdr *t = static_cast<const NextTurnHdr *>(hdr36);
         const uint32_t turn_event = decode_turn_event(t->turn_event);
         dump_next_turn(t, turn_event);
-        hud_tx_next_turn(t->road_name, t->turn_side, turn_event,
+
+        // Bounded copy of road_name: the SDK comment notes road_name may not be
+        // NUL-terminated. road_name_len is the authoritative length. Copy up to 255
+        // bytes into a stack buffer and guarantee NUL termination so downstream
+        // readers (fold and transports) never over-read the SDK heap buffer.
+        constexpr size_t kRoadCap = 255;
+        char road_buf[kRoadCap + 1];
+        const char *road = nullptr;
+        if (t->road_name && t->road_name_len) {
+            libpatch::copy_utf8_truncated(road_buf, sizeof(road_buf),
+                                          t->road_name, t->road_name_len);
+            road = road_buf;
+        }
+
+        hud_tx_next_turn(road, t->turn_side, turn_event,
                          t->turn_angle, t->turn_number);
         break;
     }

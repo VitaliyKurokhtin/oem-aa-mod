@@ -11,6 +11,7 @@
 #include "hud_nav16.h"
 #include "hud_nav.h"   // MazdaIcon glyph IDs (HUD_*) — one enum, shared with the 1.5 path
 #include "common/aa_nav16_msg.h"   // AA_NAV16_MSG_* — the sender/receiver msgId contract
+#include "common/string_safe.h"
 
 #include <cstring>
 #include <cstdio>
@@ -64,12 +65,13 @@ bool skip(Pb &c, uint32_t wire)
     }
 }
 
-void copy_str(char *dst, size_t cap, const uint8_t *s, size_t n)
+inline void copy_str(char *dst, size_t cap, const uint8_t *s, size_t n)
 {
-    if (cap == 0) return;
-    if (n >= cap) n = cap - 1;
-    std::memcpy(dst, s, n);
-    dst[n] = '\0';
+    if (!s) {
+        if (cap > 0) dst[0] = '\0';
+        return;
+    }
+    libpatch::copy_utf8_truncated(dst, cap, reinterpret_cast<const char *>(s), n);
 }
 
 // ---- NavigationDistance { meters=1, display_value=2, display_units=3 } -------
