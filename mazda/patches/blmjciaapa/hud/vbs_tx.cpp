@@ -460,7 +460,8 @@ void *sender_main(void *)
 // Seqlock write helpers used by vbs_tx_* below.
 inline void seqlock_begin() { g_seq.fetch_add(1, std::memory_order_acq_rel); }
 inline void seqlock_end()   { g_seq.fetch_add(1, std::memory_order_acq_rel);
-                              g_cv.notify_one(); }
+                              { std::lock_guard<std::mutex> lk(g_cv_mu);
+                                g_cv.notify_one(); } }
 
 // Diagnostic: nav events arriving while the sender pipeline is not
 // live (g_active==false) are silently dropped by the vbs_tx_*
@@ -526,8 +527,11 @@ void vbs_tx_stop(void)
     // it picks the flag up at the next checkpoint. The sender thread
     // sends the HUD clear frame and releases the D-Bus clients itself
     // on its way out (sender_teardown), so here we only signal + join.
-    g_stop.store(true, std::memory_order_release);
-    g_cv.notify_all();
+    {
+        std::lock_guard<std::mutex> lk(g_cv_mu);
+        g_stop.store(true, std::memory_order_release);
+        g_cv.notify_all();
+    }
 
     pthread_join(g_sender_thread, nullptr);
     g_sender_thread_up = false;
@@ -558,7 +562,8 @@ void vbs_tx_status(uint32_t status)
     } else {
         // Just wake the sender so it re-evaluates promptly on
         // route start.
-        g_cv.notify_one();
+        { std::lock_guard<std::mutex> lk(g_cv_mu);
+          g_cv.notify_one(); }
     }
 }
 
