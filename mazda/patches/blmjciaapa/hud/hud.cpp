@@ -28,6 +28,7 @@
 #include "translit.h"   // hud_translit::fold() — precomposed-Latin street-name fold
 #include "hud_nav.h"    // compute_turn_icon() — AA turn fields -> Mazda HUD glyph
 #include "hud_lane.h"   // oem_lane_code_for_aa — AA lanes -> OEM lane codes
+#include "common/string_safe.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -120,8 +121,7 @@ inline void hud_tx_next_turn(const char *road, uint32_t side, uint32_t event,
     // buffer anyway).
     if (road != nullptr && libpatch_config::hud_fold_latin()) {
         char buf[256];
-        strncpy(buf, road, sizeof(buf) - 1);
-        buf[sizeof(buf) - 1] = '\0';
+        libpatch::copy_utf8_truncated(buf, sizeof(buf), road);
         hud_translit::fold(buf);
         g_tx->next_turn(buf, icon);
         return;
@@ -398,13 +398,8 @@ void dump_next_turn(const NextTurnHdr *h, uint32_t turn_event)
     // name string. Keeping `road_name` everywhere for clarity.)
     constexpr size_t kRoadCap = 255;
     char road[kRoadCap + 1];
-    road[0] = '\0';
-    if (h->road_name && h->road_name_len) {
-        size_t n = h->road_name_len;
-        if (n > kRoadCap) n = kRoadCap;
-        memcpy(road, h->road_name, n);
-        road[n] = '\0';
-    }
+    libpatch::copy_utf8_truncated(road, sizeof(road), h->road_name,
+                                  h->road_name_len);
 
     // h->turn_event is the producer's compacted value; `turn_event`
     // (passed in) has already been mapped back to the proto enum, so
@@ -642,12 +637,10 @@ static void nav16_on_guidance(const AaGuidance *g)
 
     // Fold once here, at road ingest, not in the per-emit forwarder — distance
     // ticks re-emit the road far more often than 0x8006 changes it. Fold a local
-    // copy (g is const, decoder-owned); strncpy into acc.road zero-pads the tail
-    // so a shorter road leaves no stale bytes for the memcmp change-gate to trip
-    // on (at worst a harmless extra emit, but free to avoid).
+    // copy (g is const, decoder-owned). The bounded copy terminates the local
+    // string; fold may shorten it without clearing the bytes after its new NUL.
     char road[sizeof(acc.road)];
-    strncpy(road, g->road, sizeof(road) - 1);
-    road[sizeof(road) - 1] = '\0';
+    libpatch::copy_utf8_truncated(road, sizeof(road), g->road);
     if (libpatch_config::hud_fold_latin()) hud_translit::fold(road);
 
     // A different maneuver means the held distance belongs to the PREVIOUS step
