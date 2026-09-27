@@ -81,9 +81,20 @@ std::condition_variable g_cv;
 std::mutex              g_cv_mu;
 std::atomic<bool>       g_active{false};
 std::atomic<bool>       g_stop{false};
+std::atomic<uint32_t>   g_dropped_inactive{0};
 
 pthread_t g_sender_thread    = 0;
 bool      g_sender_thread_up = false;
+
+// Reset the last HUD snapshot before a new sender session starts.
+// If the previous trip left a road name / icon behind, a reconnect can
+// display stale guidance until the next nav event arrives.
+void reset_sender_state()
+{
+    std::memset(&g_snapshot, 0, sizeof(g_snapshot));
+    g_seq.store(0, std::memory_order_release);
+    g_dropped_inactive.store(0, std::memory_order_relaxed);
+}
 
 void *g_conn = nullptr;
 
@@ -274,8 +285,6 @@ inline void seqlock_begin() { g_seq.fetch_add(1, std::memory_order_acq_rel); }
 inline void seqlock_end()   { g_seq.fetch_add(1, std::memory_order_acq_rel);
                               g_cv.notify_one(); }
 
-std::atomic<uint32_t> g_dropped_inactive{0};
-
 void note_inactive_drop(const char *which)
 {
     uint32_t n = g_dropped_inactive.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -297,6 +306,7 @@ void svcnavi_tx_start(void)
         return;
     }
 
+    reset_sender_state();
     g_stop.store(false, std::memory_order_release);
     g_active.store(false, std::memory_order_release);
 

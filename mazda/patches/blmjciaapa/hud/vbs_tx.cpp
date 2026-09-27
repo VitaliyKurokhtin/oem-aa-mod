@@ -97,10 +97,21 @@ std::condition_variable g_cv;
 std::mutex             g_cv_mu;
 std::atomic<bool>      g_active{false};   // sender pipeline live: producers may write
 std::atomic<bool>      g_stop{false};     // stop requested: sender thread should wind down
+std::atomic<uint32_t>  g_dropped_inactive{0};
 
 // Shared sender-thread handle (both backends run the same loop).
 pthread_t g_sender_thread       = 0;
 bool      g_sender_thread_up    = false;
+
+// Reset the last HUD snapshot before a new sender session starts.
+// If the previous trip left a road name / icon behind, a reconnect can
+// display stale guidance until the next nav event arrives.
+void reset_sender_state()
+{
+    std::memset(&g_snapshot, 0, sizeof(g_snapshot));
+    g_seq.store(0, std::memory_order_release);
+    g_dropped_inactive.store(0, std::memory_order_relaxed);
+}
 
 // === OEM connection state =====================================
 //
@@ -462,8 +473,6 @@ inline void seqlock_end()   { g_seq.fetch_add(1, std::memory_order_acq_rel);
 // drive shows no HUD output. (A healthy session drops only a handful
 // during the brief start-up window before g_active flips true, then
 // the count stops climbing.)
-std::atomic<uint32_t> g_dropped_inactive{0};
-
 void note_inactive_drop(const char *which)
 {
     uint32_t n = g_dropped_inactive.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -484,6 +493,11 @@ void vbs_tx_start(void)
         LOGD("vbs_tx_start: already running");
         return;
     }
+
+    // Reconnects need a clean slate: if we don't zero the snapshot and the
+    // seqlock counter, the sender can keep replaying the previous route's
+    // guidance until a new nav event arrives.
+    reset_sender_state();
 
     // Keep session start cheap: spawn the sender thread and return
     // immediately. ALL D-Bus work — dispatcher init, the synchronous
