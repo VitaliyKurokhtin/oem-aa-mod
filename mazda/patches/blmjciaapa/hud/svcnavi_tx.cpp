@@ -283,7 +283,8 @@ void *sender_main(void *)
 
 inline void seqlock_begin() { g_seq.fetch_add(1, std::memory_order_acq_rel); }
 inline void seqlock_end()   { g_seq.fetch_add(1, std::memory_order_acq_rel);
-                              g_cv.notify_one(); }
+                              { std::lock_guard<std::mutex> lk(g_cv_mu);
+                                g_cv.notify_one(); } }
 
 void note_inactive_drop(const char *which)
 {
@@ -324,8 +325,11 @@ void svcnavi_tx_stop(void)
         return;
     }
 
-    g_stop.store(true, std::memory_order_release);
-    g_cv.notify_all();
+    {
+        std::lock_guard<std::mutex> lk(g_cv_mu);
+        g_stop.store(true, std::memory_order_release);
+        g_cv.notify_all();
+    }
 
     pthread_join(g_sender_thread, nullptr);
     g_sender_thread_up = false;
@@ -350,7 +354,8 @@ void svcnavi_tx_status(uint32_t status)
         std::memset(&g_snapshot, 0, sizeof(g_snapshot));
         seqlock_end();
     } else {
-        g_cv.notify_one();
+        { std::lock_guard<std::mutex> lk(g_cv_mu);
+          g_cv.notify_one(); }
     }
 }
 
