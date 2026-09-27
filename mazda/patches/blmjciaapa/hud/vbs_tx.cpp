@@ -533,9 +533,20 @@ void vbs_tx_stop(void)
         g_cv.notify_all();
     }
 
-    pthread_join(g_sender_thread, nullptr);
+    int join_rc = pthread_join(g_sender_thread, nullptr);
+    if (join_rc != 0) {
+        LOGE("vbs_tx_stop: pthread_join failed (%d) — sender thread state unknown; "
+             "not clearing sender_thread_up to prevent double-spawn",
+             join_rc);
+        // Do NOT clear g_sender_thread_up — a failed join means we cannot
+        // safely respawn. The session is broken; this must surface.
+        // Stop producers from writing into the orphaned snapshot, but leave
+        // the flag true so start() cannot double-spawn.
+        g_active.store(false, std::memory_order_release);
+        return;
+    }
     g_sender_thread_up = false;
-    g_sender_thread    = 0;
+    g_sender_thread = 0;
     g_active.store(false, std::memory_order_release);
     LOGD("vbs_tx_stop: sender thread stopped, D-Bus clients released");
 }
