@@ -212,6 +212,10 @@ inline bool parse_file(const char *path,
 //   true  / 1 / yes / on  -> true
 //   false / 0 / no  / off -> false
 //   anything else         -> deflt
+// Parse a non-negative integer number of meters from a config value string.
+// Accepts only plain decimal digits with no suffix.
+// Returns deflt on nullptr, empty string, leading '-', or any non-numeric
+// content. Values above 1 000 000 are clamped (sanity bound).
 inline uint32_t parse_nonnegative_meters(const char *val, uint32_t deflt)
 {
     if (val == nullptr || *val == '\0' || *val == '-') return deflt;
