@@ -562,7 +562,10 @@ void our_nav_cb(void *user_ctx, void *hdr36)
     case kTagStatus: {
         const StatusHdr *s = static_cast<const StatusHdr *>(hdr36);
         dump_status(s);
-        if (hud_distance_filter_enabled()) legacy_filter_reset();
+        if (hud_distance_filter_enabled()) {
+            if (g_legacy_visible) hud_tx_blank_guidance();
+            legacy_filter_reset();
+        }
         hud_tx_status(s->status);
         break;
     }
