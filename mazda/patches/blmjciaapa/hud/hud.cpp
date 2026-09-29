@@ -420,7 +420,6 @@ static LegacyTurnState g_legacy_turn;
 void legacy_filter_reset()
 {
     memset(&g_legacy_turn, 0, sizeof(g_legacy_turn));
-    g_legacy_visible = false;
 }
 
 bool legacy_turn_same(const NextTurnHdr *t, uint32_t event)
