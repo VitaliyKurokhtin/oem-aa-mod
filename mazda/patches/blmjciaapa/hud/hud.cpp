@@ -579,9 +579,8 @@ void our_nav_cb(void *user_ctx, void *hdr36)
             break;
         }
 
-        const bool changed = !legacy_turn_same(t, turn_event);
-        legacy_store_turn(t, turn_event);
-        if (changed) {
+        if (legacy_has_turn_changed(t, turn_event)) {
+            legacy_cache_next_turn(t, turn_event);
             if (g_legacy_visible) hud_tx_blank_guidance();
         } else if (g_legacy_visible) {
             legacy_emit_cached_turn();
