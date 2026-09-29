@@ -23,9 +23,13 @@
 //                                     street even where the OEM blanks it (default false)
 //   hud_fold_latin = true|false       fold HUD-unrenderable precomposed Latin
 //                                     street-name letters to their base forms (default true)
-//   hud_maneuver_max_distance_m = N   hide AA maneuver/street/lanes until the next
-//                                     maneuver is within N meters; integer value;
-//                                     0 disables the filter (default 0)
+//   hud_maneuver_max_distance_m = N   hide AA maneuver/street/distance/lanes until the
+//                                     next maneuver is within N meters; N is always
+//                                     treated as meters regardless of any suffix (e.g.
+//                                     "5000m" or "5km" both mean 5000 m and 5 m
+//                                     respectively — no unit conversion); minimum
+//                                     non-zero value is 100; 0/false/no/off disables
+//                                     the filter (default 0)
 //   use_protocol_v1_6 = true|false    advertise Android Auto GAL 1.6 so the phone sends the
 //                                     1.6 navigation protocol (maneuver / lanes / distance)
 //                                     instead of the 1.5 turn events; read by aap_service
@@ -208,30 +212,54 @@ inline bool parse_file(const char *path,
     return true;
 }
 
-// Lenient boolean parse. Case-insensitive:
-//   true  / 1 / yes / on  -> true
-//   false / 0 / no  / off -> false
-//   anything else         -> deflt
-// Parse a non-negative integer number of meters from a config value string.
-// Accepts only plain decimal digits with no suffix.
-// Returns deflt on nullptr, empty string, leading '-', or any non-numeric
-// content. Values above 1 000 000 are clamped (sanity bound).
+// Parse a distance-gate value for hud_maneuver_max_distance_m.
+//
+// Scans for the first run of decimal digits ([0-9]+); any leading characters
+// (sign, whitespace, letters) and any trailing suffix (unit letters, whitespace)
+// are ignored — no unit conversion is done, the number is always meters.
+// Accepts false / no / off (case-insensitive) or the numeric value 0 to
+// disable the filter (returns 0).
+//
+// WARNING: thousand-separator formats are NOT supported. A ',' or '.' in the
+// value terminates the digit scan, so "1,000" and "1.000" both parse as 1
+// (not 1000) and are then clamped to the 100 m minimum.  Use plain digits
+// only: hud_maneuver_max_distance_m = 1000
+//
+// Valid range: 0 (disabled) or [100, 1 000 000]; non-zero values outside
+// that range are clamped.  Returns deflt with a LOGW if no digits are found.
 inline uint32_t parse_nonnegative_meters(const char *val, uint32_t deflt)
 {
-    if (val == nullptr || *val == '\0' || *val == '-') return deflt;
-    char *end = nullptr;
-    unsigned long meters = strtoul(val, &end, 10);
-    if (end == val || *end != '\0') return deflt;
-    // A threshold above 1000 km is not useful. Clamp absurd values rather than
-    // carrying unexpectedly large configuration values into the HUD path.
+    if (val == nullptr) return deflt;
+
+    if (strcasecmp(val, "false") == 0 || strcasecmp(val, "no")  == 0 ||
+        strcasecmp(val, "off")   == 0)
+        return 0;
+
+    // Find the first digit; this skips any sign, whitespace, or leading letters.
+    const char *digits = strpbrk(val, "0123456789");
+    if (!digits) {
+        LOGW("config: hud_maneuver_max_distance_m=\"%s\" contains no digits — ignoring", val);
+        return deflt;
+    }
+    unsigned long meters = strtoul(digits, nullptr, 10);
+
     if (meters > 1000000UL) {
-        LOGW("config: hud_maneuver_max_distance_m=%lu exceeds maximum 1000000 m "
-             "— clamping", meters);
+        LOGW("config: hud_maneuver_max_distance_m=%lu exceeds maximum 1000000 m — clamping",
+             meters);
         meters = 1000000UL;
+    }
+    if (meters > 0 && meters < 100UL) {
+        LOGW("config: hud_maneuver_max_distance_m=%lu is below minimum 100 m — clamping to 100",
+             meters);
+        meters = 100UL;
     }
     return static_cast<uint32_t>(meters);
 }
 
+// Lenient boolean parse. Case-insensitive:
+//   true  / 1 / yes / on  -> true
+//   false / 0 / no  / off -> false
+//   anything else         -> deflt
 inline bool parse_bool(const char *val, bool deflt)
 {
     if (val == nullptr) {

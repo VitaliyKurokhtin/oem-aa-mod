@@ -422,20 +422,30 @@ void legacy_filter_reset()
     memset(&g_legacy_turn, 0, sizeof(g_legacy_turn));
 }
 
-bool legacy_turn_same(const NextTurnHdr *t, uint32_t event)
+inline void legacy_emit_blank_guidance()
 {
-    if (!g_legacy_turn.have) return false;
-    size_t road_len = (t->road_name && t->road_name_len) ? t->road_name_len : 0;
-    if (road_len >= sizeof(g_legacy_turn.road)) road_len = sizeof(g_legacy_turn.road) - 1;
-    return g_legacy_turn.side == t->turn_side &&
-           g_legacy_turn.event == event &&
-           g_legacy_turn.angle == t->turn_angle &&
-           g_legacy_turn.number == t->turn_number &&
-           g_legacy_turn.road_len == road_len &&
-           (road_len == 0 || memcmp(g_legacy_turn.road, t->road_name, road_len) == 0);
+    hud_tx_blank_guidance();
+    g_legacy_turn.visible = false;
 }
 
-void legacy_store_turn(const NextTurnHdr *t, uint32_t event)
+inline bool legacy_has_turn_changed(const NextTurnHdr *t, uint32_t event)
+{
+    if (!g_legacy_turn.have)
+        return true;
+
+    size_t road_len = (t->road_name && t->road_name_len) ? t->road_name_len : 0;
+    if (road_len >= sizeof(g_legacy_turn.road))
+        road_len = sizeof(g_legacy_turn.road) - 1;
+
+    return g_legacy_turn.side != t->turn_side ||
+           g_legacy_turn.event != event ||
+           g_legacy_turn.angle != t->turn_angle ||
+           g_legacy_turn.number != t->turn_number ||
+           g_legacy_turn.road_len != road_len ||
+           (road_len != 0 && memcmp(g_legacy_turn.road, t->road_name, road_len) != 0);
+}
+
+void legacy_cache_next_turn(const NextTurnHdr *t, uint32_t event)
 {
     g_legacy_turn.have   = true;
     g_legacy_turn.side   = t->turn_side;
@@ -455,9 +465,12 @@ void legacy_store_turn(const NextTurnHdr *t, uint32_t event)
 
 void legacy_emit_cached_turn()
 {
-    if (!g_legacy_turn.have) return;
+    if (!g_legacy_turn.have)
+        return;
+
     hud_tx_next_turn(g_legacy_turn.road, g_legacy_turn.side, g_legacy_turn.event,
                      g_legacy_turn.angle, g_legacy_turn.number);
+    g_legacy_turn.visible = true;
 }
 
 // Forward declaration so substitute_nav_cb() below can take its
@@ -562,7 +575,8 @@ void our_nav_cb(void *user_ctx, void *hdr36)
         const StatusHdr *s = static_cast<const StatusHdr *>(hdr36);
         dump_status(s);
         if (hud_distance_filter_enabled()) {
-            if (g_legacy_visible) hud_tx_blank_guidance();
+            if (g_legacy_turn.visible)
+                legacy_emit_blank_guidance();
             legacy_filter_reset();
         }
         hud_tx_status(s->status);
@@ -580,8 +594,9 @@ void our_nav_cb(void *user_ctx, void *hdr36)
 
         if (legacy_has_turn_changed(t, turn_event)) {
             legacy_cache_next_turn(t, turn_event);
-            if (g_legacy_visible) hud_tx_blank_guidance();
-        } else if (g_legacy_visible) {
+            if (g_legacy_turn.visible)
+                legacy_emit_blank_guidance();
+        } else if (g_legacy_turn.visible) {
             legacy_emit_cached_turn();
         }
         break;
@@ -600,12 +615,13 @@ void our_nav_cb(void *user_ctx, void *hdr36)
         if (!g_legacy_turn.have) break;
 
         if (!hud_distance_within_limit(d->distance)) {
-            if (g_legacy_visible) hud_tx_blank_guidance();
-            g_legacy_visible = false;
+            if (g_legacy_turn.visible)
+                legacy_emit_blank_guidance();
             break;
         }
 
-        if (!g_legacy_visible) legacy_emit_cached_turn();
+        if (!g_legacy_turn.visible)
+            legacy_emit_cached_turn();
         hud_tx_distance(d->display_distance, d->display_distance_unit);
         break;
     }
