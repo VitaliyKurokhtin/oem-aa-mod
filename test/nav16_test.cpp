@@ -138,6 +138,14 @@ int main()
         CHECK_EQ_U(roundabout_icon(359, 1), 37u, "RHT angle 359 wraps to base");
         CHECK_EQ_U(roundabout_icon(360, 1), 37u, "RHT angle 360 wraps to base");
         CHECK_EQ_U(roundabout_icon(360, 0), 49u, "LHT angle 360 wraps to base");
+
+        CHECK_EQ_U(roundabout_icon(-1, 1), 37u, "RHT angle -1 wraps to base");
+        CHECK_EQ_U(roundabout_icon(-15, 1), 37u, "RHT angle -15 wraps to base");
+        CHECK_EQ_U(roundabout_icon(-16, 1), 48u, "RHT angle -16 wraps to last glyph");
+        CHECK_EQ_U(roundabout_icon(-360, 1), 37u, "RHT angle -360 wraps to base");
+
+        CHECK_EQ_U(roundabout_icon(-16, 0), 60u, "LHT angle -16 wraps to last glyph");
+        CHECK_EQ_U(roundabout_icon(-360, 0), 49u, "LHT angle -360 wraps to base");
     }
 
     // --- NavigationStatus (0x8003): status field 1 varint --------------------
