@@ -583,7 +583,6 @@ void our_nav_cb(void *user_ctx, void *hdr36)
         legacy_store_turn(t, turn_event);
         if (changed) {
             if (g_legacy_visible) hud_tx_blank_guidance();
-            g_legacy_visible = false;
         } else if (g_legacy_visible) {
             legacy_emit_cached_turn();
         }
