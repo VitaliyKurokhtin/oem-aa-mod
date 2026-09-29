@@ -412,10 +412,10 @@ struct LegacyTurnState {
     uint32_t event;
     int32_t  angle;
     int32_t  number;
+    bool     visible; // HUD is currently displaying this turn
 };
 
 static LegacyTurnState g_legacy_turn;
-static bool g_legacy_visible = false;
 
 void legacy_filter_reset()
 {
