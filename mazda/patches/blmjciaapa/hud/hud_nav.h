@@ -113,7 +113,11 @@ constexpr uint8_t kTurnIcons[20][3] = {
 // glyphs at IDs 37..48 and 49..60.
 inline uint8_t roundabout_icon(int32_t degrees, int32_t side_index_lr)
 {
-    uint8_t nearest = static_cast<uint8_t>(((degrees + 15) / 30) % 12);
+    int32_t normalized = degrees % 360;
+    if (normalized < 0) normalized += 360;
+
+    uint8_t nearest =
+        static_cast<uint8_t>(((normalized + 15) / 30) % 12);
     uint8_t offset  = (side_index_lr == 0) ? 49 : 37;
     return static_cast<uint8_t>(nearest + offset);
 }
