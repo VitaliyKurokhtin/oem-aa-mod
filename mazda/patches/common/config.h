@@ -224,7 +224,11 @@ inline uint32_t parse_nonnegative_meters(const char *val, uint32_t deflt)
     if (end == val || *end != '\0') return deflt;
     // A threshold above 1000 km is not useful. Clamp absurd values rather than
     // carrying unexpectedly large configuration values into the HUD path.
-    if (meters > 1000000UL) meters = 1000000UL;
+    if (meters > 1000000UL) {
+        LOGW("config: hud_maneuver_max_distance_m=%lu exceeds maximum 1000000 m "
+             "— clamping", meters);
+        meters = 1000000UL;
+    }
     return static_cast<uint32_t>(meters);
 }
 
