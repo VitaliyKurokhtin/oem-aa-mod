@@ -610,7 +610,6 @@ void our_nav_cb(void *user_ctx, void *hdr36)
 
         if (!g_legacy_visible) legacy_emit_cached_turn();
         hud_tx_distance(d->display_distance, d->display_distance_unit);
-        g_legacy_visible = true;
         break;
     }
     default:
