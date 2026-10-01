@@ -131,6 +131,23 @@ and add the same env var inside it:
 </service>
 ```
 
+**`jciBLMSettings`** (optional — only needed for `hud_display_language`, see
+Configuration below). Find the `<service … name="jciBLMSettings" …>` block and
+add the same env var inside it:
+
+```xml
+<service type="jci_service" name="jciBLMSettings" path="/jci/settings/svcjciblmsettings.so" …>
+    <!-- existing entries left in place -->
+    <environ_var env_name="LD_PRELOAD"
+                 env_value="/data_persist/oem-aa-mod/libpatch-svcjciblmsettings.so"/>
+</service>
+```
+
+> **Note:** `jciBLMSettings` is `reset_board="yes"` in stock `sm.conf`, like
+> `jcinavi`: if the process dies, the head unit reboots. The shim does no work
+> at load time and falls back to a transparent passthrough on any doubt, but
+> double-check the file is in place (and intact) before adding the line.
+
 For 1.6 HUD guidance BOTH `jciAAPA` (blmjciaapa) and `aap_service` must be
 preloaded: the aap_service shim advertises 1.6 and forwards the decoded
 navigation to the blmjciaapa shim, which renders it on the HUD. With
@@ -194,6 +211,7 @@ case-insensitive.
 | `force_street_name` | `true` / `false` | `false` | Force the Android Auto street name onto the HUD street line even where the OEM blanks it (see the EU note below). |
 | `hud_fold_latin` | `true` / `false` | `true` | Fold HUD-unrenderable precomposed Latin letters in street names to their base forms (see the note below). |
 | `use_protocol_v1_6` | `true` / `false` | `false` | Advertise Android Auto GAL 1.6 so the phone sends the 1.6 navigation protocol (maneuver / lanes / distance) for the HUD. Read by the `aap_service` shim; requires it to be preloaded (see the note below). |
+| `hud_display_language` | `off` / `english` / `1`–`255` | `off` | Override the display-language code sent to the instrument cluster / HUD so the HUD shows the street name with any head-unit language (see the note below). Read by the `svcjciblmsettings` shim; requires it to be preloaded into `jciBLMSettings`. |
 | `aa_audio_low_latency` | `true` / `false` | `false` | Fix Android Auto guidance-audio clipping at the head, beginning, and tail of prompts — one switch for the whole audio-cutoff fix. Needs **both** the `aap_service` and `blmjciaapa` shims preloaded (see the note below). |
 
 Booleans are lenient — `true`/`1`/`yes`/`on` and `false`/`0`/`no`/`off`
@@ -281,16 +299,49 @@ the street, so it is safe to enable everywhere if preferred.
   preloaded (step 2). Every piece is gated by this one key — there is no separate audio
   switch.
 
+- **`hud_display_language`** — the head unit sends the instrument cluster /
+  HUD a "Display Characters" code (CMU control type 2, CAN PID 0x4B) derived
+  from the head-unit language, on every boot and every language change. The
+  HUD only draws the street-name line for some codes: e.g. with the head unit
+  in Hungarian (code 21) the HUD shows the arrow and distance but never the
+  street, even with `force_street_name = true`; in English it does. Setting
+  `hud_display_language = english` (code 7) makes the `svcjciblmsettings`
+  shim rewrite that code, so the head-unit UI keeps its language and the HUD
+  shows the street. Side effect: the cluster / HUD's own texts (warnings)
+  follow the forced code. Tested on a 2019 Mazda 6 (EU, 74.00.324A, color
+  HUD): Hungarian UI + `english` → street name shown, also after reboots.
+
+  Codes the stock head unit sends (74.00.324, from
+  `BLM_SETTINGS_Languages_LANG_to_VBS16`). Which codes hide the street line
+  is only confirmed for Hungarian; languages not listed send 4.
+
+  | Code | Head-unit language | Code | Head-unit language |
+  | --- | --- | --- | --- |
+  | 1 | Japanese | 15 | Swedish |
+  | 2 | English (Australia) | 16 | Danish |
+  | 4 | English (US), and any language not listed | 17 | Norwegian |
+  | 5 | French (Canada) | 18 | Finnish |
+  | 6 | Spanish (Mexico) | 19 | Czech |
+  | 7 | English (UK) | 20 | Slovak |
+  | 8 | French | 21 | Hungarian |
+  | 9 | German | 22 | Turkish |
+  | 10 | Italian | 23 | Polish |
+  | 11 | Spanish | 24 | Chinese (Simplified) |
+  | 12 | Russian | 25 | Chinese (Traditional) |
+  | 13 | Portuguese (Portugal) | 26 | Arabic |
+  | 14 | Dutch | 27 | Ukrainian |
+
 After editing `libpatch.conf`, restart the affected service(s) —
 `jciAAPA`, `jcinavi` if you patched it, and `aap_service` if you enabled
 `use_protocol_v1_6` or `aa_audio_low_latency` — or reboot for the change to take effect.
+`hud_display_language` needs a reboot (the code is sent when `jciBLMSettings` starts).
 The config is read once at library load.
 
 ## Uninstall / disable
 
 Remove (or comment out) the `<environ_var>` line(s) you added in
-`/jci/sm/sm.conf` (the `jciAAPA` one, the `jcinavi` one if present, and the
-`aap_service` one if you enabled 1.6), restore the original
+`/jci/sm/sm.conf` (the `jciAAPA` one, the `jcinavi` one if present, the
+`aap_service` one if you enabled 1.6, and the `jciBLMSettings` one if present), restore the original
 `/etc/aap_system_attributes*.xml` files from the `.orig` backups, then restart
 the affected services (`smctl -r -n jciAAPA` / `smctl -r -n jcinavi` /
 `smctl -r -n aap_service`) or reboot. The
