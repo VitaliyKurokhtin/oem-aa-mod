@@ -233,6 +233,33 @@ int main()
         }
     }
 
+    // ── 10. parse_display_language / hud_display_language ────────────
+    {
+        printf("[10] parse_display_language\n");
+        CHECK_EQ_U(libpatch_config::parse_display_language("off",     5), 0,  "\"off\"");
+        CHECK_EQ_U(libpatch_config::parse_display_language("FALSE",   5), 0,  "\"FALSE\"");
+        CHECK_EQ_U(libpatch_config::parse_display_language("no",      5), 0,  "\"no\"");
+        CHECK_EQ_U(libpatch_config::parse_display_language("0",       5), 0,  "\"0\"");
+        CHECK_EQ_U(libpatch_config::parse_display_language("english", 0), 7,  "\"english\"");
+        CHECK_EQ_U(libpatch_config::parse_display_language("English", 0), 7,  "\"English\"");
+        CHECK_EQ_U(libpatch_config::parse_display_language("en",      0), 7,  "\"en\"");
+        CHECK_EQ_U(libpatch_config::parse_display_language("7",       0), 7,  "\"7\"");
+        CHECK_EQ_U(libpatch_config::parse_display_language("21",      0), 21, "\"21\"");
+        CHECK_EQ_U(libpatch_config::parse_display_language("255",     0), 255, "\"255\"");
+        CHECK_EQ_U(libpatch_config::parse_display_language("256",     3), 3,  "\"256\" out of range -> default");
+        CHECK_EQ_U(libpatch_config::parse_display_language("7x",      3), 3,  "\"7x\" -> default");
+        CHECK_EQ_U(libpatch_config::parse_display_language("",        3), 3,  "\"\" -> default");
+        CHECK_EQ_U(libpatch_config::parse_display_language("hungarian", 3), 3, "\"hungarian\" -> default");
+        CHECK_EQ_U(libpatch_config::parse_display_language(nullptr,   3), 3,  "nullptr -> default");
+
+        libpatch_config::Settings s;
+        CHECK_EQ_U(s.hud_display_language, 0, "default is off");
+        libpatch_config::apply_kv("hud_display_language", "english", &s);
+        CHECK_EQ_U(s.hud_display_language, 7, "apply_kv hud_display_language=english");
+        libpatch_config::apply_kv("HUD_DISPLAY_LANGUAGE", "off", &s);
+        CHECK_EQ_U(s.hud_display_language, 0, "apply_kv HUD_DISPLAY_LANGUAGE=off (key case)");
+    }
+
     printf("\n%s\n", g_fail ? "RESULT: FAIL" : "RESULT: PASS");
     return g_fail;
 }
