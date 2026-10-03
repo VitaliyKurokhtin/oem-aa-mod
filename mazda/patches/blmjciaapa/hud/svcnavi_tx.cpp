@@ -82,9 +82,20 @@ std::condition_variable g_cv;
 std::mutex              g_cv_mu;
 std::atomic<bool>       g_active{false};
 std::atomic<bool>       g_stop{false};
+std::atomic<uint32_t>   g_dropped_inactive{0};
 
 pthread_t g_sender_thread    = 0;
 bool      g_sender_thread_up = false;
+
+// Reset the last HUD snapshot before a new sender session starts.
+// If the previous trip left a road name / icon behind, a reconnect can
+// display stale guidance until the next nav event arrives.
+void reset_sender_state()
+{
+    std::memset(&g_snapshot, 0, sizeof(g_snapshot));
+    g_seq.store(0, std::memory_order_release);
+    g_dropped_inactive.store(0, std::memory_order_relaxed);
+}
 
 void *g_conn = nullptr;
 
@@ -273,9 +284,8 @@ void *sender_main(void *)
 
 inline void seqlock_begin() { g_seq.fetch_add(1, std::memory_order_acq_rel); }
 inline void seqlock_end()   { g_seq.fetch_add(1, std::memory_order_acq_rel);
-                              g_cv.notify_one(); }
-
-std::atomic<uint32_t> g_dropped_inactive{0};
+                              { std::lock_guard<std::mutex> lk(g_cv_mu);
+                                g_cv.notify_one(); } }
 
 void note_inactive_drop(const char *which)
 {
@@ -298,6 +308,7 @@ void svcnavi_tx_start(void)
         return;
     }
 
+    reset_sender_state();
     g_stop.store(false, std::memory_order_release);
     g_active.store(false, std::memory_order_release);
 
@@ -315,10 +326,24 @@ void svcnavi_tx_stop(void)
         return;
     }
 
-    g_stop.store(true, std::memory_order_release);
-    g_cv.notify_all();
+    {
+        std::lock_guard<std::mutex> lk(g_cv_mu);
+        g_stop.store(true, std::memory_order_release);
+        g_cv.notify_all();
+    }
 
-    pthread_join(g_sender_thread, nullptr);
+    int join_rc = pthread_join(g_sender_thread, nullptr);
+    if (join_rc != 0) {
+        LOGE("svcnavi_tx_stop: pthread_join failed (%d) — sender thread state unknown; "
+             "not clearing sender_thread_up to prevent double-spawn",
+             join_rc);
+        // Do NOT clear g_sender_thread_up — a failed join means we cannot
+        // safely respawn. The session is broken; this must surface.
+        // Stop producers from writing into the orphaned snapshot, but leave
+        // the flag true so start() cannot double-spawn.
+        g_active.store(false, std::memory_order_release);
+        return;
+    }
     g_sender_thread_up = false;
     g_sender_thread    = 0;
     g_active.store(false, std::memory_order_release);
@@ -341,7 +366,8 @@ void svcnavi_tx_status(uint32_t status)
         std::memset(&g_snapshot, 0, sizeof(g_snapshot));
         seqlock_end();
     } else {
-        g_cv.notify_one();
+        { std::lock_guard<std::mutex> lk(g_cv_mu);
+          g_cv.notify_one(); }
     }
 }
 
