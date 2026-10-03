@@ -60,11 +60,11 @@ int main()
         auto s = hx("80 06 0a 0e 0a 02 08 01 12 08 0a 06 52 4f 41 44 20 41");
         AaGuidance g;
         uint32_t id = hud_nav16_on_frame(s.data(), (int)s.size(), &g, nullptr);
-        hud_nav16_format_guidance(&g, buf, sizeof(buf));
+        hud_nav16_format_guidance(&g, buf, sizeof(buf), true);
         printf("  %s\n", buf);
         CHECK_EQ_U(id, 0x8006, "msgId");
         CHECK_EQ_U(g.maneuver_type, 1u, "maneuver_type");
-        CHECK_EQ_U(hud_nav16_glyph(&g), 12u, "glyph (HUD_FLAG)");
+        CHECK_EQ_U(hud_nav16_glyph(&g, true), 12u, "glyph (HUD_FLAG)");
         CHECK_EQ_S(g.road, "ROAD A", "road");
         CHECK_EQ_U(g.n_lanes, 0, "n_lanes");
     }
@@ -101,11 +101,11 @@ int main()
         auto j = hx("80 06 0a 22 0a 02 08 08 12 08 0a 06 52 4f 41 44 20 42 1a 0a 0a 02 08 01 0a 04 08 05 10 01 1a 06 0a 04 08 05 10 01");
         AaGuidance g;
         uint32_t id = hud_nav16_on_frame(j.data(), (int)j.size(), &g, nullptr);
-        hud_nav16_format_guidance(&g, buf, sizeof(buf));
+        hud_nav16_format_guidance(&g, buf, sizeof(buf), true);
         printf("  %s\n", buf);
         CHECK_EQ_U(id, 0x8006, "msgId");
         CHECK_EQ_U(g.maneuver_type, 8u, "maneuver_type");
-        CHECK_EQ_U(hud_nav16_glyph(&g), 3u, "glyph (HUD_RIGHT)");
+        CHECK_EQ_U(hud_nav16_glyph(&g, true), 3u, "glyph (HUD_RIGHT)");
         CHECK_EQ_S(g.road, "ROAD B", "road");
         CHECK_EQ_U(g.n_lanes, 2, "n_lanes");
         CHECK_EQ_U(g.lanes[0].present_mask, 0x022u, "L0 present_mask");
@@ -121,12 +121,12 @@ int main()
         auto r = hx("80 06 0a 06 0a 04 08 22 18 5a");
         AaGuidance g;
         uint32_t id = hud_nav16_on_frame(r.data(), (int)r.size(), &g, nullptr);
-        hud_nav16_format_guidance(&g, buf, sizeof(buf));
+        hud_nav16_format_guidance(&g, buf, sizeof(buf), true);
         printf("  %s\n", buf);
         CHECK_EQ_U(id, 0x8006, "msgId");
         CHECK_EQ_U(g.maneuver_type, 34u, "maneuver_type");
         CHECK_EQ_U(g.roundabout_exit_angle, 90, "roundabout_exit_angle");
-        CHECK_EQ_U(hud_nav16_glyph(&g), 40u, "glyph (roundabout 37+3)");
+        CHECK_EQ_U(hud_nav16_glyph(&g, true), 40u, "glyph (roundabout 37+3)");
     }
 
     // --- Legacy GAL 1.5 roundabout glyph wrap at 360 degrees ----------------
@@ -214,6 +214,198 @@ int main()
         // After detach, feeding must not fire callbacks.
         hud_nav16_feed(st6.data(), (int)st6.size());
         CHECK_EQ_U(n_g, 1, "no dispatch after sink detach");
+    }
+
+    // =========================================================================
+    // ROUNDABOUT GLYPHS
+    //
+    // The roundabout maneuver types state their own circulation direction, so
+    // the glyph bank is picked from the wire and never guessed:
+    //   32/33 = clockwise        -> bank base 49 (left-hand traffic)
+    //   34/35 = counterclockwise -> bank base 37 (right-hand traffic)
+    // Within a bank the glyph is the circulation angle in 30-degree steps,
+    // index = round(angle / 30); the angle increments in the driving direction
+    // for BOTH banks, so the index is handedness-independent.
+    // =========================================================================
+
+    // --- REGRESSION: the angle-bearing types (33/35) --------------------------
+    // These four (exit_number, angle) pairs are the ones real captures contain,
+    // and this mapping is road-validated. It must not change.
+    {
+        printf("[7] regression: angle present -> unchanged fan-out\n");
+        struct Case { const char *hex; unsigned exp_glyph; const char *msg; };
+        static const Case kC[] = {
+            // 0a NN = step; 0a 07 = maneuver{ type, exit_number, angle }
+            {"80 06 0a 09 0a 07 08 23 10 02 18 87 01", 42, "CCW angle 135 -> 42"},
+            {"80 06 0a 09 0a 07 08 23 10 02 18 b4 01", 43, "CCW angle 180 -> 43"},
+            {"80 06 0a 09 0a 07 08 23 10 03 18 e1 01", 45, "CCW angle 225 -> 45"},
+            {"80 06 0a 09 0a 07 08 23 10 03 18 8e 02", 46, "CCW angle 270 -> 46"},
+            // the legitimate "back out the entry" U-turn: angle 360 -> index 0
+            {"80 06 0a 09 0a 07 08 23 10 02 18 e8 02", 37, "CCW angle 360 -> 37 (U-turn)"},
+            // clockwise bank, same index arithmetic
+            {"80 06 0a 09 0a 07 08 21 10 02 18 b4 01", 55, "CW  angle 180 -> 55"},
+        };
+        for (unsigned i = 0; i < sizeof(kC)/sizeof(kC[0]); ++i) {
+            auto s = hx(kC[i].hex);
+            AaGuidance g;
+            hud_nav16_on_frame(s.data(), (int)s.size(), &g, nullptr);
+            CHECK_EQ_U(hud_nav16_glyph(&g, true), kC[i].exp_glyph, kC[i].msg);
+        }
+    }
+
+    // --- REGRESSION: plain turns keep their table glyph ----------------------
+    // A stale roundabout_exit_number rides along on the plain-turn steps that
+    // follow a roundabout, so it must never turn a turn into a roundabout.
+    {
+        printf("[8] regression: plain turns unaffected by a stale exit_number\n");
+        auto a = hx("80 06 0a 06 0a 04 08 08 10 02");   // TURN_NORMAL_RIGHT + exit 2
+        AaGuidance g;
+        hud_nav16_on_frame(a.data(), (int)a.size(), &g, nullptr);
+        CHECK_EQ_U(g.maneuver_type, 8u, "maneuver_type");
+        CHECK_EQ_U(hud_nav16_glyph(&g, true), 3u, "TURN_NORMAL_RIGHT -> HUD_RIGHT (3)");
+        auto b = hx("80 06 0a 06 0a 04 08 07 10 02");   // TURN_NORMAL_LEFT + exit 2
+        hud_nav16_on_frame(b.data(), (int)b.size(), &g, nullptr);
+        CHECK_EQ_U(hud_nav16_glyph(&g, true), 2u, "TURN_NORMAL_LEFT -> HUD_LEFT (2)");
+    }
+
+    // --- NEW: angle absent -> estimate the angle from the exit number --------
+    // Senders that use the non-WITH_ANGLE roundabout types (32/34) give only an
+    // exit number. Exit N of an E-arm roundabout sits at 360*N/E, so with E
+    // unknown the angle is estimated as the value minimising expected error
+    // over the arm-count distribution: 90, 180, 270, 270, 300, 300 for N=1..6
+    // (it saturates because a 4th exit implies at least 5 arms).
+    {
+        printf("[9] angle absent -> exit-number estimate\n");
+        // real captured frame: type 34, exit 2, no angle, road+cue "422"
+        auto real = hx("80 06 0a 14 0a 04 08 22 10 02"
+                       " 12 05 0a 03 34 32 32 22 05 0a 03 34 32 32");
+        AaGuidance g;
+        hud_nav16_on_frame(real.data(), (int)real.size(), &g, nullptr);
+        CHECK_EQ_U(g.maneuver_type, 34u, "maneuver_type (RA_ENTER_EXIT_CCW)");
+        CHECK_EQ_U(g.roundabout_exit_number, 2, "roundabout_exit_number");
+        CHECK_EQ_S(g.road, "422", "road");
+        CHECK_EQ_U(hud_nav16_glyph(&g, true), 43u, "real frame: exit 2 -> 43 (was 37)");
+
+        struct Case { const char *hex; unsigned exp; const char *msg; };
+        static const Case kC[] = {
+            {"80 06 0a 06 0a 04 08 22 10 01", 40, "CCW exit 1 ->  90deg -> 40"},
+            {"80 06 0a 06 0a 04 08 22 10 02", 43, "CCW exit 2 -> 180deg -> 43"},
+            {"80 06 0a 06 0a 04 08 22 10 03", 46, "CCW exit 3 -> 270deg -> 46"},
+            {"80 06 0a 06 0a 04 08 22 10 04", 46, "CCW exit 4 -> 270deg -> 46"},
+            {"80 06 0a 06 0a 04 08 22 10 05", 47, "CCW exit 5 -> 300deg -> 47"},
+            {"80 06 0a 06 0a 04 08 22 10 06", 47, "CCW exit 6 -> 300deg -> 47"},
+            {"80 06 0a 06 0a 04 08 22 10 09", 47, "CCW exit 9 -> clamped -> 47"},
+            {"80 06 0a 06 0a 04 08 20 10 01", 52, "CW  exit 1 ->  90deg -> 52"},
+            {"80 06 0a 06 0a 04 08 20 10 02", 55, "CW  exit 2 -> 180deg -> 55"},
+            {"80 06 0a 06 0a 04 08 20 10 03", 58, "CW  exit 3 -> 270deg -> 58"},
+        };
+        for (unsigned i = 0; i < sizeof(kC)/sizeof(kC[0]); ++i) {
+            auto s = hx(kC[i].hex);
+            hud_nav16_on_frame(s.data(), (int)s.size(), &g, nullptr);
+            CHECK_EQ_U(hud_nav16_glyph(&g, true), kC[i].exp, kC[i].msg);
+        }
+    }
+
+    // --- NEW: neither angle nor exit number ---------------------------------
+    // Nothing directional on the wire. Fall back to the straight-through
+    // position rather than index 0, which means "back out the entry".
+    {
+        printf("[10] neither angle nor exit number -> straight through\n");
+        auto s = hx("80 06 0a 04 0a 02 08 22");        // type 34 alone
+        AaGuidance g;
+        hud_nav16_on_frame(s.data(), (int)s.size(), &g, nullptr);
+        CHECK_EQ_U(g.roundabout_exit_number, 0, "exit_number absent -> 0");
+        CHECK_EQ_U(hud_nav16_glyph(&g, true), 43u, "CCW no data -> 180deg -> 43");
+        auto t = hx("80 06 0a 04 0a 02 08 20");        // type 32 alone
+        hud_nav16_on_frame(t.data(), (int)t.size(), &g, nullptr);
+        CHECK_EQ_U(hud_nav16_glyph(&g, true), 55u, "CW  no data -> 180deg -> 55");
+    }
+
+    // --- NEW: an exit number must never override a real angle ---------------
+    {
+        printf("[11] angle wins over exit number\n");
+        auto s = hx("80 06 0a 09 0a 07 08 22 10 01 18 b4 01");
+        AaGuidance g;
+        hud_nav16_on_frame(s.data(), (int)s.size(), &g, nullptr);
+        CHECK_EQ_U(hud_nav16_glyph(&g, true), 43u, "angle 180 beats exit-1 estimate");
+    }
+
+    // --- Disabled exit-angle estimate ---------------------------------------
+    {
+        printf("[12] guess_exit_icon=false -> exit number is not used for the glyph\n");
+        auto s = hx("80 06 0a 06 0a 04 08 22 10 02");
+        AaGuidance g;
+        hud_nav16_on_frame(s.data(), (int)s.size(), &g, nullptr);
+        CHECK_EQ_U(hud_nav16_glyph(&g, /*guess_exit_icon=*/true), 43u,
+                   "guess on: exit 2 -> 180deg -> 43");
+        CHECK_EQ_U(hud_nav16_glyph(&g, /*guess_exit_icon=*/false), 37u,
+                   "guess off: no angle -> index-0 fallback -> 37");
+        auto a = hx("80 06 0a 08 0a 06 08 22 10 01 18 5a");
+        hud_nav16_on_frame(a.data(), (int)a.size(), &g, nullptr);
+        CHECK_EQ_U(hud_nav16_glyph(&g, /*guess_exit_icon=*/false), 40u,
+                   "guess off: real angle 90 -> 40");
+    }
+
+    // --- Parenthesized exit number in the street name -----------------------
+    {
+        printf("[13] roundabout_prepend_exit_number\n");
+        char road[64];
+        auto s = hx("80 06 0a 14 0a 04 08 22 10 02"
+                    " 12 05 0a 03 34 32 32 22 05 0a 03 34 32 32");
+        AaGuidance g;
+        hud_nav16_on_frame(s.data(), (int)s.size(), &g, nullptr);
+
+        for (int i = 1; i <= 9; ++i) {
+            g.roundabout_exit_number = i;
+            hud_nav16_road_with_exit(&g, /*prepend=*/true, road, sizeof(road));
+            char expected[16];
+            snprintf(expected, sizeof(expected), "(%d) 422", i);
+            CHECK_EQ_S(road, expected, "filled parenthesized exit number 1..9");
+        }
+
+        g.roundabout_exit_number = 10;
+        hud_nav16_road_with_exit(&g, /*prepend=*/true, road, sizeof(road));
+        CHECK_EQ_S(road, "422", "exit above 9 is omitted");
+
+        g.roundabout_exit_number = 2;
+
+        hud_nav16_road_with_exit(&g, /*prepend=*/false, road, sizeof(road));
+        CHECK_EQ_S(road, "422", "prepend off -> road unchanged");
+
+        auto a = hx("80 06 0a 16 0a 06 08 22 10 02 18 5a"
+                    " 12 05 0a 03 34 32 32 22 05 0a 03 34 32 32");
+        hud_nav16_on_frame(a.data(), (int)a.size(), &g, nullptr);
+        hud_nav16_road_with_exit(&g, /*prepend=*/true, road, sizeof(road));
+        CHECK_EQ_S(road, "422", "angle present -> no prefix even with prepend on");
+
+        auto t = hx("80 06 0a 0c 0a 04 08 08 10 02 12 04 0a 02 42 42");
+        hud_nav16_on_frame(t.data(), (int)t.size(), &g, nullptr);
+        hud_nav16_road_with_exit(&g, /*prepend=*/true, road, sizeof(road));
+        CHECK_EQ_S(road, "BB", "non-roundabout -> no prefix");
+
+        char small[8];
+        auto s2 = hx("80 06 0a 06 0a 04 08 22 10 02");
+        hud_nav16_on_frame(s2.data(), (int)s2.size(), &g, nullptr);
+        strncpy(g.road, "LONGROADNAME", sizeof(g.road) - 1);
+        hud_nav16_road_with_exit(&g, /*prepend=*/true, small, sizeof(small));
+        CHECK_EQ_U(strlen(small), sizeof(small) - 1, "truncated to buffer capacity");
+        CHECK_EQ_S(small, "(2) LON", "parenthesized prefix truncates with road name");
+
+        {
+            auto z = hx("80 06 0a 14 0a 04 08 22 10 00"
+                        " 12 05 0a 03 34 32 32 22 05 0a 03 34 32 32");
+            hud_nav16_on_frame(z.data(), (int)z.size(), &g, nullptr);
+            CHECK(g.have_exit_number, "exit 0 is present on the wire");
+            hud_nav16_road_with_exit(&g, /*prepend=*/true, road, sizeof(road));
+            CHECK_EQ_S(road, "422", "exit 0 -> no prefix (1-based)");
+
+            auto neg = hx("80 06 0a 18 0a 08 08 22 10 80 80 80 80 08"
+                          " 12 05 0a 03 34 32 32 22 05 0a 03 34 32 32");
+            hud_nav16_on_frame(neg.data(), (int)neg.size(), &g, nullptr);
+            CHECK(g.roundabout_exit_number < 0, "hostile varint casts negative");
+            hud_nav16_road_with_exit(&g, /*prepend=*/true, road, sizeof(road));
+            CHECK_EQ_S(road, "422", "out-of-range exit -> no prefix, road intact");
+        }
     }
 
     printf("\n%s\n", g_fail ? "RESULT: FAIL" : "RESULT: PASS");

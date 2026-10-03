@@ -194,6 +194,8 @@ case-insensitive.
 | `force_street_name` | `true` / `false` | `false` | Force the Android Auto street name onto the HUD street line even where the OEM blanks it (see the EU note below). |
 | `hud_fold_latin` | `true` / `false` | `true` | Fold HUD-unrenderable precomposed Latin letters in street names to their base forms (see the note below). |
 | `use_protocol_v1_6` | `true` / `false` | `false` | Advertise Android Auto GAL 1.6 so the phone sends the 1.6 navigation protocol (maneuver / lanes / distance) for the HUD. Read by the `aap_service` shim; requires it to be preloaded (see the note below). |
+| `roundabout_guess_exit_icon` | `true` / `false` | `false` | For a roundabout that gives an exit number but no exit angle (GAL 1.6 only), estimate the circulation angle from the exit number so a directional roundabout glyph is shown instead of the index-0 "back out the entry" fallback glyph. |
+| `roundabout_prepend_exit_number` | `true` / `false` | `false` | For a roundabout that gives an exit number but no exit angle (GAL 1.6 only), prepend its number to the HUD street name. Independent of `roundabout_guess_exit_icon`. |
 | `aa_audio_low_latency` | `true` / `false` | `false` | Fix Android Auto guidance-audio clipping at the head, beginning, and tail of prompts — one switch for the whole audio-cutoff fix. Needs **both** the `aap_service` and `blmjciaapa` shims preloaded (see the note below). |
 
 Booleans are lenient — `true`/`1`/`yes`/`on` and `false`/`0`/`no`/`off`

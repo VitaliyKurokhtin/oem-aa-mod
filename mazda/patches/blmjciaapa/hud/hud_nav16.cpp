@@ -128,8 +128,8 @@ void dec_maneuver(const uint8_t *b, size_t n, AaGuidance &g)
     Pb c{b, b + n}; uint32_t f, w;
     while (rd_tag(c, f, w)) {
         if (f == 1 && w == 0) { uint64_t v; if (!rd_varint(c, v)) break; g.maneuver_type = (uint32_t)v; g.have_maneuver = true; }
-        else if (f == 2 && w == 0) { uint64_t v; if (!rd_varint(c, v)) break; g.roundabout_exit_number = (int32_t)v; }
-        else if (f == 3 && w == 0) { uint64_t v; if (!rd_varint(c, v)) break; g.roundabout_exit_angle = (int32_t)v; }
+        else if (f == 2 && w == 0) { uint64_t v; if (!rd_varint(c, v)) break; g.roundabout_exit_number = (int32_t)v; g.have_exit_number = true; }
+        else if (f == 3 && w == 0) { uint64_t v; if (!rd_varint(c, v)) break; g.roundabout_exit_angle = (int32_t)v; g.have_exit_angle = true; }
         else if (!skip(c, w)) break;
     }
 }
@@ -270,6 +270,48 @@ uint8_t roundabout_glyph(int32_t exit_angle, bool clockwise)
                                 : HUD_ROUNDABOUT_CCW_BASE) + idx);
 }
 
+// Circulation angle to assume when a roundabout step carries no exit angle,
+// keyed by roundabout_exit_number (index 0 = no usable number either).
+//
+// Exit N of an E-arm roundabout — arms evenly spaced, entry at 0 — sits at
+// 360*N/E. E is never on the wire, so the angle can only be estimated; these
+// are the values that minimise expected angular error over the plausible arm
+// counts, and the choice is unchanged whether 3-arm or 4-arm roundabouts
+// dominate. It is N*90 up to exit 3 and then saturates, because a 4th exit
+// implies at least 5 arms.
+//
+// Accuracy: about one 30-degree glyph step on average. The worst cases are a
+// 3-arm roundabout taken at exit 2 (truly 240) and a 6-arm at exit 3 (truly
+// 180), where the estimate is 60-90 degrees out. That is the accepted cost of
+// having no arm count; it is bounded, unlike the alternative of treating an
+// absent angle as 0, which lands on the "back out the entry" glyph every time.
+int32_t exit_number_angle(int32_t exit_number)
+{
+    static const int16_t kAngle[] = {180, 90, 180, 270, 270, 300, 300};
+    if (exit_number < 0)
+        exit_number = 0;
+    if (exit_number > 6)
+        exit_number = 6;
+    return kAngle[exit_number];
+}
+
+// The circulation angle to render for a roundabout: the sender's own angle when
+// it sent one, else the exit-number estimate, else straight through.
+//
+// Handedness is NOT decided here — it comes from the maneuver type (32/33 are
+// clockwise, 34/35 counterclockwise), so it is always what the sender stated and
+// never inferred from the vehicle or the market. The estimate above is
+// handedness-independent because the angle increments in the driving direction
+// in both banks, so left-hand-traffic roundabouts need no separate table.
+int32_t roundabout_angle(const AaGuidance *g, bool guess_exit_icon)
+{
+    if (g->have_exit_angle) return g->roundabout_exit_angle;
+    if (!guess_exit_icon) return 0;   // no estimate -> index-0 (pre-estimate) glyph
+    return exit_number_angle(g->have_exit_number ? g->roundabout_exit_number : 0);
+}
+
+bool is_roundabout(uint32_t t) { return t >= 32 && t <= 35; }
+
 } // namespace
 
 static const char *hud_nav16_maneuver_name(uint32_t t)
@@ -277,16 +319,36 @@ static const char *hud_nav16_maneuver_name(uint32_t t)
     return (t < sizeof(kManeuver)/sizeof(kManeuver[0])) ? kManeuver[t] : "?";
 }
 
-uint8_t hud_nav16_glyph(const AaGuidance *g)
+uint8_t hud_nav16_glyph(const AaGuidance *g, bool guess_exit_icon)
 {
     if (!g) return HUD_BLANK;
     switch (g->maneuver_type) {
         case 32: case 33:  // RA_ENTER_EXIT_CW (clockwise = left-hand traffic)
-            return roundabout_glyph(g->roundabout_exit_angle, /*clockwise=*/true);
+            return roundabout_glyph(roundabout_angle(g, guess_exit_icon), /*clockwise=*/true);
         case 34: case 35:  // RA_ENTER_EXIT_CCW (counterclockwise = right-hand traffic)
-            return roundabout_glyph(g->roundabout_exit_angle, /*clockwise=*/false);
+            return roundabout_glyph(roundabout_angle(g, guess_exit_icon), /*clockwise=*/false);
         default:
             return (g->maneuver_type < 43) ? kManeuverGlyph[g->maneuver_type] : HUD_EMPTY;
+    }
+}
+
+void hud_nav16_road_with_exit(const AaGuidance *g, bool prepend_exit_number,
+                              char *dst, size_t cap)
+{
+    if (!dst || cap == 0) return;
+    if (!g) { dst[0] = '\0'; return; }
+
+    if (prepend_exit_number && is_roundabout(g->maneuver_type)
+        && g->have_exit_number && !g->have_exit_angle && cap > 4
+        && g->roundabout_exit_number >= 1 && g->roundabout_exit_number <= 9) {
+
+        dst[0] = '(';
+        dst[1] = (char)('0' + g->roundabout_exit_number);
+        dst[2] = ')';
+        dst[3] = ' ';
+        libpatch::copy_utf8_truncated(dst + 4, cap - 4, g->road);
+    } else {
+        libpatch::copy_utf8_truncated(dst, cap, g->road);
     }
 }
 
@@ -393,15 +455,26 @@ bool hud_nav16_read_status(const uint8_t *raw, int size, int *status_out)
     return false;   // field 1 not present
 }
 
-int hud_nav16_format_guidance(const AaGuidance *g, char *buf, int cap)
+int hud_nav16_format_guidance(const AaGuidance *g, char *buf, int cap, bool guess_exit_icon)
 {
     if (!g || !buf || cap <= 0) return 0;
     int o = snprintf(buf, cap, "nav16 STATE: maneuver=%u(%s) glyph=%u road=\"%s\" steps=%d lanes=%d",
                           g->maneuver_type, hud_nav16_maneuver_name(g->maneuver_type),
-                          hud_nav16_glyph(g), g->road, g->n_steps, g->n_lanes);
+                          hud_nav16_glyph(g, guess_exit_icon),
+                          g->road, g->n_steps, g->n_lanes);
     for (int i = 0; i < g->n_lanes && o < cap; ++i)
         o += snprintf(buf + o, cap - o, " [L%d pres=0x%03x hi=0x%03x]",
                            i, g->lanes[i].present_mask, g->lanes[i].highlight_mask);
+    // Echo the roundabout inputs so a log shows which branch produced the glyph
+    // above: a sent angle, or the exit-number estimate standing in for one.
+    if ((g->have_exit_number || g->have_exit_angle) && o > 0 && o < cap) {
+        char ex[16], an[16];
+        if (g->have_exit_number) snprintf(ex, sizeof ex, "%d", g->roundabout_exit_number);
+        else                     snprintf(ex, sizeof ex, "none");
+        if (g->have_exit_angle)  snprintf(an, sizeof an, "%d", g->roundabout_exit_angle);
+        else                     snprintf(an, sizeof an, "none");
+        o += snprintf(buf + o, cap - o, " ra[exit=%s angle=%s]", ex, an);
+    }
     return o;
 }
 

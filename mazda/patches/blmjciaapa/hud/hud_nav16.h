@@ -13,6 +13,7 @@
 #define LIBPATCH_BLMJCIAAPA_HUD_HUD_NAV16_H
 
 #include <stdint.h>
+#include <stddef.h>   // size_t
 
 enum { HUD_NAV16_MAX_LANES = 8 };
 
@@ -27,8 +28,16 @@ struct AaLane {
 struct AaGuidance {
     bool     have_maneuver;
     uint32_t maneuver_type;            // NavigationManeuver.NavigationType, 0..42
-    int32_t  roundabout_exit_number;   // field 2 — meaningful for ROUNDABOUT_*
-    int32_t  roundabout_exit_angle;    // field 3 — degrees; selects the roundabout glyph
+    int32_t  roundabout_exit_number;   // field 2 — 1-based, in circulation order;
+                                       // 0 when absent (see have_exit_number)
+    bool     have_exit_number;         // field 2 was on the wire
+    int32_t  roundabout_exit_angle;    // field 3 — degrees from the entry, increasing in
+                                       // the driving direction; 0 when absent
+    bool     have_exit_angle;          // field 3 was on the wire. Needed because an
+                                       // absent angle and a real 0 are otherwise
+                                       // indistinguishable, and they mean different
+                                       // things: the protocol's angle range is
+                                       // (0, 360], so 0 only ever means "not sent"
     char     road[64];                 // NavigationRoad.name (UTF-8)
     int      n_steps;                  // total steps present (diagnostic)
     int      n_lanes;                  // lanes on step[0] (0..8)
@@ -55,7 +64,12 @@ uint32_t hud_nav16_on_frame(const uint8_t *raw, int size, AaGuidance *g, AaPosit
 // The maneuver-glyph map: decoded guidance -> Mazda HUD glyph (MazdaIcon, and
 // 37..60 for roundabouts by exit angle). The single source of truth for the
 // AA -> HUD maneuver pairing.
-uint8_t hud_nav16_glyph(const AaGuidance *g);
+// guess_exit_icon optionally estimates the glyph angle when the sender omits it.
+uint8_t hud_nav16_glyph(const AaGuidance *g, bool guess_exit_icon);
+
+// Format the road name, optionally prefixing an exit number (1..9).
+void hud_nav16_road_with_exit(const AaGuidance *g, bool prepend_exit_number,
+                              char *dst, size_t cap);
 
 // AA NavigationDistance.DistanceUnits (0..7) -> Mazda HUD unit (1=m,2=mi,3=km,
 // 4=yd,5=ft; 0=none). The 1.6 unit map (distinct from the 1.5 NAVDistanceMessage
@@ -67,7 +81,7 @@ uint8_t aa_to_mazda_unit(uint32_t units);
 int32_t parse_dist_x10(const char *s);
 
 // Pure formatters (snprintf into caller buffer; no I/O) for one-line logging.
-int hud_nav16_format_guidance(const AaGuidance *g, char *buf, int cap);
+int hud_nav16_format_guidance(const AaGuidance *g, char *buf, int cap, bool guess_exit_icon);
 int hud_nav16_format_position(const AaPosition *p, char *buf, int cap);
 
 // Read NavigationStatus (0x8003) field 1 (status enum varint) from a FULL frame
