@@ -105,24 +105,27 @@ int hook_routeMessage(void *self, uint32_t chan, uint32_t msgId,
                                                           iobuf_ref);
 }
 
-void bump_version()
+bool bump_version()
 {
     volatile uint32_t *p = reinterpret_cast<volatile uint32_t *>(kVersionInsnAddr);
     if (*p != kVersionInsnOld) {
         LOGE("version: ABORT - 0x%08x at 0x%08lx, expected 0x%08x",
              *p, (unsigned long)kVersionInsnAddr, kVersionInsnOld);
-        return;
+        return false;
     }
     if (!set_prot(kVersionInsnAddr, 4, PROT_READ | PROT_WRITE)) {
         LOGE("version: ABORT - mprotect RW failed");
-        return;
+        return false;
     }
     *p = kVersionInsnNew;
-    set_prot(kVersionInsnAddr, 4, PROT_READ | PROT_EXEC);
+    if (!set_prot(kVersionInsnAddr, 4, PROT_READ | PROT_EXEC))
+        LOGW("version: mprotect RO+EX restore failed (version IS bumped; continuing)");
+
     __builtin___clear_cache(reinterpret_cast<char *>(kVersionInsnAddr),
                             reinterpret_cast<char *>(kVersionInsnAddr + 4));
     LOGD("version: advertising GAL 1.6 (mov r2,#5 -> #6 @0x%08lx)",
          (unsigned long)kVersionInsnAddr);
+    return true;
 }
 
 bool install_nav_hook()
@@ -146,17 +149,48 @@ bool install_nav_hook()
     return true;
 }
 
+bool restore_nav_hook()
+{
+    volatile uintptr_t *slot = reinterpret_cast<volatile uintptr_t *>(kVtableSlotAddr);
+    if (*slot != reinterpret_cast<uintptr_t>(&hook_routeMessage)) {
+        LOGW("restore_nav_hook: slot7 already restored or never hooked (0x%08lx)",
+             (unsigned long)*slot);
+        return false;
+    }
+    if (!set_prot(kVtableSlotAddr, sizeof(uintptr_t), PROT_READ | PROT_WRITE)) {
+        LOGE("restore_nav_hook: ABORT - mprotect RW failed; hook remains installed");
+        return false;
+    }
+    *slot = kRouteMessageAddr;
+    if (!set_prot(kVtableSlotAddr, sizeof(uintptr_t), PROT_READ)) {
+        LOGW("restore_nav_hook: mprotect RO restore failed (hook IS removed; vtable writable)");
+        return true; // hook is removed; partial success is not the same as full failure
+    }
+    return true;
+}
+
 } // namespace
 
 namespace aap_service_navi {
 
 void init()
 {
-    LOGD("GAL 1.6 nav path active");
-    if (install_nav_hook())
-        bump_version();
-    else
-        LOGE("GAL 1.6 path DISABLED - hook failed; staying stock GAL 1.5");
+    // Install the hook first: it swallows the 1.5 navigation messages and relays
+    // them to the GAL 1.6 socket. Only advertise 1.6 after that patch is ready.
+    if (!install_nav_hook()) {
+        LOGE("GAL 1.6 navigation patch DISABLED - hook failed; staying stock GAL 1.5");
+        return;
+    }
+
+    if (!bump_version()) {
+        if (!restore_nav_hook())
+            LOGE("GAL 1.6 navigation patch DISABLED - failed to roll back navigation hook");
+        else
+            LOGE("GAL 1.6 navigation patch ROLLED BACK; staying stock GAL 1.5");
+        return;
+    }
+
+    LOGD("GAL 1.6 navigation patch ACTIVATED");
 }
 
 } // namespace aap_service_navi

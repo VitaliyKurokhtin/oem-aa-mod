@@ -11,6 +11,7 @@
 #include "hud_nav16.h"
 #include "hud_nav.h"   // MazdaIcon glyph IDs (HUD_*) — one enum, shared with the 1.5 path
 #include "common/aa_nav16_msg.h"   // AA_NAV16_MSG_* — the sender/receiver msgId contract
+#include "common/string_safe.h"
 
 #include <cstring>
 #include <cstdio>
@@ -64,14 +65,6 @@ bool skip(Pb &c, uint32_t wire)
     }
 }
 
-void copy_str(char *dst, size_t cap, const uint8_t *s, size_t n)
-{
-    if (cap == 0) return;
-    if (n >= cap) n = cap - 1;
-    std::memcpy(dst, s, n);
-    dst[n] = '\0';
-}
-
 // ---- NavigationDistance { meters=1, display_value=2, display_units=3 } -------
 void dec_distance(const uint8_t *b, size_t n,
                   int32_t &meters, char *disp, size_t disp_cap, uint32_t &units)
@@ -79,8 +72,12 @@ void dec_distance(const uint8_t *b, size_t n,
     Pb c{b, b + n}; uint32_t f, w;
     while (rd_tag(c, f, w)) {
         if (f == 1 && w == 0) { uint64_t v; if (!rd_varint(c, v)) break; meters = (int32_t)v; }
-        else if (f == 2 && w == 2) { const uint8_t *d; size_t l; if (!rd_bytes(c, d, l)) break; copy_str(disp, disp_cap, d, l); }
-        else if (f == 3 && w == 0) { uint64_t v; if (!rd_varint(c, v)) break; units = (uint32_t)v; }
+        else if (f == 2 && w == 2) {
+            const uint8_t *d; size_t l;
+            if (!rd_bytes(c, d, l)) break;
+            libpatch::copy_utf8_truncated(disp, disp_cap,
+                                          reinterpret_cast<const char *>(d), l);
+        } else if (f == 3 && w == 0) { uint64_t v; if (!rd_varint(c, v)) break; units = (uint32_t)v; }
         else if (!skip(c, w)) break;
     }
 }
@@ -90,8 +87,12 @@ void dec_road_name(const uint8_t *b, size_t n, char *dst, size_t cap)
 {
     Pb c{b, b + n}; uint32_t f, w;
     while (rd_tag(c, f, w)) {
-        if (f == 1 && w == 2) { const uint8_t *d; size_t l; if (!rd_bytes(c, d, l)) break; copy_str(dst, cap, d, l); }
-        else if (!skip(c, w)) break;
+        if (f == 1 && w == 2) {
+            const uint8_t *d; size_t l;
+            if (!rd_bytes(c, d, l)) break;
+            libpatch::copy_utf8_truncated(dst, cap,
+                                          reinterpret_cast<const char *>(d), l);
+        } else if (!skip(c, w)) break;
     }
 }
 
@@ -141,7 +142,15 @@ void dec_step(const uint8_t *b, size_t n, AaGuidance &g)
         if (w == 2) {
             const uint8_t *d; size_t l; if (!rd_bytes(c, d, l)) break;
             if      (f == 1) dec_maneuver(d, l, g);
-            else if (f == 2) dec_road_name(d, l, g.road, sizeof(g.road));
+            else if (f == 2) {
+                // Road name is truncated to sizeof(g.road) here at wire-ingest, before
+                // any fold() in nav16_on_guidance. For long Vietnamese names with many
+                // toned vowels, this means some may be clipped to 63 bytes even though
+                // they'd fit after folding (3-byte precomposed → 1–2 byte base). The
+                // 1.5 SDK path folds first, so it avoids this; accepting the asymmetry
+                // to keep 1.6 decoder lightweight. Known limitation for longest names.
+                dec_road_name(d, l, g.road, sizeof(g.road));
+            }
             else if (f == 3) {
                 if (g.n_lanes < HUD_NAV16_MAX_LANES) {
                     dec_lane(d, l, g.lanes[g.n_lanes]);
@@ -176,7 +185,10 @@ void dec_dest_distance(const uint8_t *b, size_t n, AaPosition &p)
             dec_distance(d, l, p.dest_meters, p.dest_display, sizeof(p.dest_display), p.dest_units);
             p.have_dest = true;
         } else if (f == 2 && w == 2) {
-            const uint8_t *d; size_t l; if (!rd_bytes(c, d, l)) break; copy_str(p.eta, sizeof(p.eta), d, l);
+            const uint8_t *d; size_t l;
+            if (!rd_bytes(c, d, l)) break;
+            libpatch::copy_utf8_truncated(p.eta, sizeof(p.eta),
+                                          reinterpret_cast<const char *>(d), l);
         } else if (!skip(c, w)) break;
     }
 }

@@ -42,6 +42,7 @@
 #include "hud_nav.h"
 #include "hud_lane.h"   // oem_lane_glyph — OEM lane code -> cluster glyph (mapped on this wire)
 #include "../oem/libjcivbsnaviclient.h"
+#include "common/string_safe.h"
 #include "common/thread_util.h"
 
 #include <chrono>
@@ -556,13 +557,9 @@ void vbs_tx_next_turn(const char *road_name, uint32_t dir_icon)
     }
 
     seqlock_begin();
-    if (road_name) {
-        std::strncpy(g_snapshot.road_name, road_name,
-                     sizeof(g_snapshot.road_name) - 1);
-        g_snapshot.road_name[sizeof(g_snapshot.road_name) - 1] = '\0';
-    } else {
-        g_snapshot.road_name[0] = '\0';
-    }
+    libpatch::copy_utf8_truncated(g_snapshot.road_name,
+                                  sizeof(g_snapshot.road_name),
+                                  road_name);
     // Relay: hud.cpp already resolved the Mazda glyph. The 1.5 path carries no
     // lanes (the snapshot's lane bytes default to all-hidden).
     g_snapshot.dir_icon = dir_icon;

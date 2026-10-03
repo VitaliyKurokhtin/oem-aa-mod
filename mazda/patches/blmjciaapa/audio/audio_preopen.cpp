@@ -131,7 +131,10 @@ void write_status(bool installed)
         g_stat_seen, g_stat_fired, g_stat_code);
     if (n <= 0)
         return;
-    int fd = open(STATUS_PATH, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    // Do not follow a symlink in /tmp. This file is only diagnostic output,
+    // so refusing the write is safer than allowing it to overwrite another
+    // file selected by somebody else.
+    int fd = open(STATUS_PATH, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0644);
     if (fd < 0)
         return;
     ssize_t w = write(fd, buf, (size_t)n);
