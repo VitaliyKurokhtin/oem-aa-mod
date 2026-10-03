@@ -19,7 +19,7 @@ everything the on-device install needs:
 ```
 oem-aa-mod-<version>/
   libpatch-blmjciaapa.so              # -> /data_persist/oem-aa-mod/
-  libpatch-svcjcinavi.so              # -> /data_persist/oem-aa-mod/ (optional; HUD merge)
+  libpatch-svcjcinavi.so              # -> /data_persist/oem-aa-mod/ (optional; HUD merge + compass)
   libpatch-aap_service.so             # -> /data_persist/oem-aa-mod/ (optional; protocol v1.6)
   resources/
     aap_system_attributes.xml         # -> /etc/
@@ -65,8 +65,9 @@ writes, and without an explicit flush a power cycle before the next
 write-back can leave the file truncated or missing.
 
 The `libpatch-svcjcinavi.so` and `libpatch.conf` lines are optional:
-copy `libpatch-svcjcinavi.so` only if you want the HUD-merge shim (it
-self-disables in any process that isn't the nav service), and
+copy `libpatch-svcjcinavi.so` if you want the HUD-merge shim or
+`compass_always_on` (it self-disables in any process that isn't the nav
+service), and
 `libpatch.conf` only if you want to override defaults. The two libraries
 load into different services — `libpatch-blmjciaapa.so` is preloaded for
 `jciAAPA` and `libpatch-svcjcinavi.so` for `jcinavi`, each via its own
@@ -107,8 +108,9 @@ want to patch.
 </service>
 ```
 
-**`jcinavi`** (optional — HUD-merge shim; only needed with
-`hud_transport = svcnavi` and the navigation SD card). Find the
+**`jcinavi`** (optional — needed for the HUD-merge shim, which in turn
+needs `hud_transport = svcnavi` and the navigation SD card, and/or for
+`compass_always_on`, which needs neither). Find the
 `<service … name="jcinavi" …>` block and add the same env var inside it:
 
 ```xml
@@ -193,6 +195,7 @@ case-insensitive.
 | `hud_transport` | `svcnavi` / `vbs` | `svcnavi` | Which path HUD guidance takes (only relevant when `hud = true`). |
 | `force_street_name` | `true` / `false` | `false` | Force the Android Auto street name onto the HUD street line even where the OEM blanks it (see the EU note below). |
 | `hud_fold_latin` | `true` / `false` | `true` | Fold HUD-unrenderable precomposed Latin letters in street names to their base forms (see the note below). |
+| `compass_always_on` | `true` / `false` | `false` | Keep the instrument-cluster compass alive at all times, instead of only above ~9 km/h and only while the NVRAM speed restriction is enabled. Read by the `svcjcinavi` shim; requires it to be preloaded (see the note below). |
 | `use_protocol_v1_6` | `true` / `false` | `false` | Advertise Android Auto GAL 1.6 so the phone sends the 1.6 navigation protocol (maneuver / lanes / distance) for the HUD. Read by the `aap_service` shim; requires it to be preloaded (see the note below). |
 | `aa_audio_low_latency` | `true` / `false` | `false` | Fix Android Auto guidance-audio clipping at the head, beginning, and tail of prompts — one switch for the whole audio-cutoff fix. Needs **both** the `aap_service` and `blmjciaapa` shims preloaded (see the note below). |
 
@@ -205,8 +208,9 @@ are all accepted.
   navigation service, which becomes the single writer of the HUD frame.
   Required for the speed-limit display and clean coexistence with OEM
   nav, but needs the navigation SD card.
-  The `libpatch-svcjcinavi.so` HUD-merge shim only matters with this
-  transport. (`svcjcinavi` is accepted as an alias.)
+  The *HUD-merge* part of `libpatch-svcjcinavi.so` only matters with this
+  transport; its `compass_always_on` part is independent of both the
+  transport and the SD card. (`svcjcinavi` is accepted as an alias.)
 - **`vbs`** — write the HUD frame directly to `com.jci.vbs.navi`. Works
   with no navigation SD card, but it is one of two writers, so it can
   conflict with OEM nav guidance.
@@ -226,6 +230,32 @@ The option only applies with `hud_transport = svcnavi` (the
 `libpatch-svcjcinavi.so` merge shim must be installed and patched into
 `jcinavi`, as in step 2). It is harmless on firmware that does not blank
 the street, so it is safe to enable everywhere if preferred.
+
+- **`compass_always_on`** fixes the instrument-cluster compass, which is dead
+  far more often than most owners realise.
+
+  The nav service only publishes a heading while one internal flag is set, and
+  that flag follows a vehicle-speed signal computed by the VIP: it goes to `1`
+  above **9.00 km/h** and back to `0` below **7.00 km/h**. So on a stock unit the
+  compass works *only while driving*. On top of that, the head unit pins the same
+  flag to `0` outright whenever the NVRAM key `bus_bcm_speed_restriction` is set
+  to `disable` — which is exactly what the usual touchscreen-while-driving tweak
+  does — and then the compass never appears at any speed.
+
+  Turning the speed restriction back on to recover the compass has a price: the
+  same setting re-arms the OEM navigation app's own lockout, so a destination can
+  no longer be entered while moving. That is the trade this option removes. It
+  forces the flag non-zero **inside the nav service only**, so the NVRAM key can
+  stay `disable` — Android Auto, CarPlay, DVD, LVDS and the nav app all stay
+  unrestricted — and the compass still runs. Genuine non-zero readings are passed
+  through untouched; only zeros are lifted.
+
+  Requires `libpatch-svcjcinavi.so` preloaded into `jcinavi` (step 2). **No
+  navigation SD card is needed** — this works without one.
+
+  While stationary there is no valid heading to publish (the source is a GPS
+  course-over-ground, meaningless at rest), and the cluster usually shows `N` after
+  start — the same as the OEM navigation app does.
 
 - **`hud_fold_latin`** handles a HUD-font limitation: the head-up display's
   ECU font only has glyphs for Unicode below roughly U+0800, so any
