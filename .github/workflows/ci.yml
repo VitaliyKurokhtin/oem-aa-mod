@@ -39,6 +39,12 @@ jobs:
       - name: Run nav16_test
         run: ./test/build/nav16_test
 
+      - name: Build config_test (host g++)
+        run: make -C test config_test
+
+      - name: Run config_test
+        run: ./test/build/config_test
+
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 20

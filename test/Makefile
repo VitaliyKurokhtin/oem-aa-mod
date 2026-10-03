@@ -64,7 +64,7 @@ HUD_DIR       := ../mazda/patches/blmjciaapa/hud
 HOST_CXXFLAGS := -std=gnu++11 -O2 -Wall -Wextra -I$(HUD_DIR) -I../mazda/patches
 
 BUILD := build
-TOOLS := gsi_test lane_test nav16_test
+TOOLS := gsi_test lane_test nav16_test config_test
 BINS  := $(addprefix $(BUILD)/,$(TOOLS))
 
 .PHONY: all clean $(TOOLS)
@@ -81,6 +81,10 @@ $(BUILD)/lane_test: lane_test.cpp | $(BUILD)
 # nav16_test is a HOST binary (plain g++) — runs on the build machine, not the CMU.
 $(BUILD)/nav16_test: nav16_test.cpp $(HUD_DIR)/hud_nav16.cpp | $(BUILD)
 	$(HOST_CXX) $(HOST_CXXFLAGS) $^ -o $@
+
+# config_test is a HOST binary exercising the config.h inline parser functions.
+$(BUILD)/config_test: config_test.cpp | $(BUILD)
+	$(HOST_CXX) $(HOST_CXXFLAGS) $< -o $@
 
 # Convenience: `make gsi_test` builds build/gsi_test.
 $(TOOLS): %: $(BUILD)/%
