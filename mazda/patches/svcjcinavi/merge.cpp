@@ -76,6 +76,7 @@
 #include "log.h"
 #include "../common/config.h"
 #include "../common/preload.h"
+#include "../common/string_safe.h"
 #include "../common/oem/vbs_navi_hud.h"
 
 #include <dlfcn.h>
@@ -373,12 +374,7 @@ int VBS_NAVI_TMC_SetHUD_Display_Msg2(void *conn, VbsNaviHudMsg2 *msg2,
         // didn't resolve. A null/empty street is stored as "".
         const char *src =
             g_cur_street ? g_cur_street : msg2->guidancePointName;
-        if (src != nullptr) {
-            strncpy(g_aap_street, src, sizeof(g_aap_street) - 1);
-            g_aap_street[sizeof(g_aap_street) - 1] = '\0';
-        } else {
-            g_aap_street[0] = '\0';
-        }
+        libpatch::copy_utf8_truncated(g_aap_street, sizeof(g_aap_street), src);
         // Re-point this AAP-origin strip at our captured copy so the AAP
         // frame itself shows the real street rather than the market
         // blank — identical to the OEM-cadence REPLACE below, so the two

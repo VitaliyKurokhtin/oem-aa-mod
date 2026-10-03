@@ -8,6 +8,7 @@
 // on it. Pure host build (no ARM sysroot).
 
 #include "hud_nav16.h"
+#include "hud_nav.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -128,10 +129,29 @@ int main()
         CHECK_EQ_U(hud_nav16_glyph(&g), 40u, "glyph (roundabout 37+3)");
     }
 
+    // --- Legacy GAL 1.5 roundabout glyph wrap at 360 degrees ----------------
+    // 12 glyphs exist per traffic side, so the rounded index must wrap 12 -> 0.
+    {
+        printf("[5] Legacy GAL 1.5 roundabout angle wrap\n");
+        CHECK_EQ_U(roundabout_icon(344, 1), 48u, "RHT angle 344 -> last glyph");
+        CHECK_EQ_U(roundabout_icon(345, 1), 37u, "RHT angle 345 wraps to base");
+        CHECK_EQ_U(roundabout_icon(359, 1), 37u, "RHT angle 359 wraps to base");
+        CHECK_EQ_U(roundabout_icon(360, 1), 37u, "RHT angle 360 wraps to base");
+        CHECK_EQ_U(roundabout_icon(360, 0), 49u, "LHT angle 360 wraps to base");
+
+        CHECK_EQ_U(roundabout_icon(-1, 1), 37u, "RHT angle -1 wraps to base");
+        CHECK_EQ_U(roundabout_icon(-15, 1), 37u, "RHT angle -15 wraps to base");
+        CHECK_EQ_U(roundabout_icon(-16, 1), 48u, "RHT angle -16 wraps to last glyph");
+        CHECK_EQ_U(roundabout_icon(-360, 1), 37u, "RHT angle -360 wraps to base");
+
+        CHECK_EQ_U(roundabout_icon(-16, 0), 60u, "LHT angle -16 wraps to last glyph");
+        CHECK_EQ_U(roundabout_icon(-360, 0), 49u, "LHT angle -360 wraps to base");
+    }
+
     // --- NavigationStatus (0x8003): status field 1 varint --------------------
     //   0x8003 body: field 1 (tag 0x08) varint = 2  -> status 2
     {
-        printf("[5] NavigationStatus 0x8003 field 1\n");
+        printf("[6] NavigationStatus 0x8003 field 1\n");
         auto st = hx("80 03 08 02");
         int status = 999;
         bool ok = hud_nav16_read_status(st.data(), (int)st.size(), &status);
@@ -145,7 +165,7 @@ int main()
     // push path: register a sink, feed the raw frame, assert the right
     // callback fired with the decoded struct.
     {
-        printf("[6] hud_nav16_feed -> sink dispatch\n");
+        printf("[7] hud_nav16_feed -> sink dispatch\n");
         static int   n_g = 0, n_p = 0, n_s = 0;
         static char  last_road[128] = {0};
         static int   last_step = -1;

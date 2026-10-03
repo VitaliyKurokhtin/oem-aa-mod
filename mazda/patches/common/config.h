@@ -23,6 +23,13 @@
 //                                     street even where the OEM blanks it (default false)
 //   hud_fold_latin = true|false       fold HUD-unrenderable precomposed Latin
 //                                     street-name letters to their base forms (default true)
+//   hud_maneuver_max_distance_m = N   hide AA maneuver/street/distance/lanes until the
+//                                     next maneuver is within N meters; N is always
+//                                     treated as meters regardless of any suffix (e.g.
+//                                     "5000m" or "5km" both mean 5000 m and 5 m
+//                                     respectively — no unit conversion); minimum
+//                                     non-zero value is 100; 0/false/no/off disables
+//                                     the filter (default 0)
 //   use_protocol_v1_6 = true|false    advertise Android Auto GAL 1.6 so the phone sends the
 //                                     1.6 navigation protocol (maneuver / lanes / distance)
 //                                     instead of the 1.5 turn events; read by aap_service
@@ -74,6 +81,7 @@
 #include <dlfcn.h>
 #include <limits.h>    // PATH_MAX
 #include <stddef.h>
+#include <stdlib.h>    // strtoul
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>   // strcasecmp
@@ -204,6 +212,50 @@ inline bool parse_file(const char *path,
     return true;
 }
 
+// Parse a distance-gate value for hud_maneuver_max_distance_m.
+//
+// Scans for the first run of decimal digits ([0-9]+); any leading characters
+// (sign, whitespace, letters) and any trailing suffix (unit letters, whitespace)
+// are ignored — no unit conversion is done, the number is always meters.
+// Accepts false / no / off (case-insensitive) or the numeric value 0 to
+// disable the filter (returns 0).
+//
+// WARNING: thousand-separator formats are NOT supported. A ',' or '.' in the
+// value terminates the digit scan, so "1,000" and "1.000" both parse as 1
+// (not 1000) and are then clamped to the 100 m minimum.  Use plain digits
+// only: hud_maneuver_max_distance_m = 1000
+//
+// Valid range: 0 (disabled) or [100, 1 000 000]; non-zero values outside
+// that range are clamped.  Returns deflt with a LOGW if no digits are found.
+inline uint32_t parse_nonnegative_meters(const char *val, uint32_t deflt)
+{
+    if (val == nullptr) return deflt;
+
+    if (strcasecmp(val, "false") == 0 || strcasecmp(val, "no")  == 0 ||
+        strcasecmp(val, "off")   == 0)
+        return 0;
+
+    // Find the first digit; this skips any sign, whitespace, or leading letters.
+    const char *digits = strpbrk(val, "0123456789");
+    if (!digits) {
+        LOGW("config: hud_maneuver_max_distance_m=\"%s\" contains no digits — ignoring", val);
+        return deflt;
+    }
+    unsigned long meters = strtoul(digits, nullptr, 10);
+
+    if (meters > 1000000UL) {
+        LOGW("config: hud_maneuver_max_distance_m=%lu exceeds maximum 1000000 m — clamping",
+             meters);
+        meters = 1000000UL;
+    }
+    if (meters > 0 && meters < 100UL) {
+        LOGW("config: hud_maneuver_max_distance_m=%lu is below minimum 100 m — clamping to 100",
+             meters);
+        meters = 100UL;
+    }
+    return static_cast<uint32_t>(meters);
+}
+
 // Lenient boolean parse. Case-insensitive:
 //   true  / 1 / yes / on  -> true
 //   false / 0 / no  / off -> false
@@ -232,6 +284,7 @@ struct Settings {
     HudTransport hud_transport     = HUD_TRANSPORT_SVCNAVI;
     bool         force_street_name = false;
     bool         hud_fold_latin    = true;
+    uint32_t     hud_maneuver_max_distance_m = 0;
     bool         use_protocol_v1_6 = false;
     bool         aa_audio_low_latency = false;
     bool         mute_pauses_phone = true;
@@ -279,6 +332,9 @@ inline void apply_kv(const char *key, const char *val, void *ud)
         s.force_street_name = parse_bool(val, s.force_street_name);
     } else if (strcasecmp(key, "hud_fold_latin") == 0) {
         s.hud_fold_latin = parse_bool(val, s.hud_fold_latin);
+    } else if (strcasecmp(key, "hud_maneuver_max_distance_m") == 0) {
+        s.hud_maneuver_max_distance_m =
+            parse_nonnegative_meters(val, s.hud_maneuver_max_distance_m);
     } else if (strcasecmp(key, "use_protocol_v1_6") == 0) {
         s.use_protocol_v1_6 = parse_bool(val, s.use_protocol_v1_6);
     } else if (strcasecmp(key, "aa_audio_low_latency") == 0) {
@@ -307,7 +363,8 @@ inline void log_effective(const char *prefix)
 {
     const Settings &s = settings();
     LOGD("config: %s touch=%s hud=%s hud_transport=%s force_street_name=%s "
-            "hud_fold_latin=%s use_protocol_v1_6=%s aa_audio_low_latency=%s "
+            "hud_fold_latin=%s hud_maneuver_max_distance_m=%u "
+            "use_protocol_v1_6=%s aa_audio_low_latency=%s "
             "mute_pauses_phone=%s "
             "unmute_starts_playback=%s "
             "block_headunit_media_play=%s bt_pairing_bypass_all_devices=%s "
@@ -318,6 +375,7 @@ inline void log_effective(const char *prefix)
          transport_name(s.hud_transport),
          s.force_street_name ? "true" : "false",
          s.hud_fold_latin ? "true" : "false",
+         static_cast<unsigned>(s.hud_maneuver_max_distance_m),
          s.use_protocol_v1_6 ? "true" : "false",
          s.aa_audio_low_latency ? "true" : "false",
          s.mute_pauses_phone ? "true" : "false",
@@ -365,6 +423,7 @@ inline bool         hud_enabled()    { return settings().hud; }
 inline HudTransport hud_transport()  { return settings().hud_transport; }
 inline bool         force_street_name() { return settings().force_street_name; }
 inline bool         hud_fold_latin() { return settings().hud_fold_latin; }
+inline uint32_t     hud_maneuver_max_distance_m() { return settings().hud_maneuver_max_distance_m; }
 inline bool         use_protocol_v1_6() { return settings().use_protocol_v1_6; }
 inline bool         aa_audio_low_latency() { return settings().aa_audio_low_latency; }
 inline bool         mute_pauses_phone() { return settings().mute_pauses_phone; }
