@@ -47,7 +47,8 @@ Installing a prebuilt release and the on-device setup are covered in
 - Triple: `arm-cortexa9_neon-linux-gnueabi`
 - Arch flags: `-march=armv7-a -mtune=cortex-a9 -mfpu=neon`
 - Always built with `--sysroot=mazda/m3-toolchain/arm-cortexa9_neon-linux-gnueabi/sysroot` so headers/libs come from the CMU's glibc, not the host.
-- `-static-libstdc++` to avoid a runtime libstdc++ mismatch on the device.
+- The project intentionally keeps the C++ ABI aligned with the CMU's shipped libstdc++ rather than statically baking in a newer toolchain runtime. This avoids ABI mismatches when OEM libraries and the preload shim exchange C++ objects.
+- Release builds include standard hardening flags (`-fstack-protector-strong`, `_FORTIFY_SOURCE=2`, and RELRO/NOEXECSTACK linker flags) to reduce common memory-corruption and exploitation paths without altering the functional behavior of the OEM patching logic.
 
 ## License & attribution
 

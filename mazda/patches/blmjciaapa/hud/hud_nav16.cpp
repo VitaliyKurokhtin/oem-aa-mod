@@ -286,7 +286,8 @@ uint8_t hud_nav16_glyph(const AaGuidance *g)
         case 34: case 35:  // RA_ENTER_EXIT_CCW (counterclockwise = right-hand traffic)
             return roundabout_glyph(g->roundabout_exit_angle, /*clockwise=*/false);
         default:
-            return (g->maneuver_type < 43) ? kManeuverGlyph[g->maneuver_type] : HUD_EMPTY;
+            return (g->maneuver_type < 43) ? kManeuverGlyph[g->maneuver_type]
+                                           : static_cast<uint8_t>(HUD_EMPTY);
     }
 }
 

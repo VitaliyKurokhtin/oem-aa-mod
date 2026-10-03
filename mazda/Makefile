@@ -49,48 +49,40 @@ PKG_LIBS   := $(if $(PKGS),$(shell $(PKG_CONFIG) --libs   $(PKGS)))
 
 # Flags shared by all patches and both configurations.
 # -fPIC is required for code that goes into a shared object.
-# -static-libstdc++ keeps the .so off the device's older libstdc++ at
-# load time (same rationale as the original single-binary build).
-# -Idbus exposes the vendored CMU D-Bus proxies (generated_cmu.h) from
-# the community headunit project (mirrored under mazda/dbus/). All
-# patches can `#include "generated_cmu.h"` to talk to OEM D-Bus
-# interfaces without re-deriving the C++ proxy classes by hand.
-# $(PKG_CFLAGS) brings in dbus-c++-1 + libdbus-1 include dirs from
-# the sysroot's pkg-config metadata; matching $(PKG_LIBS) in LDFLAGS
-# below carries the right -L / -l invocations.
+# -fstack-protector-strong adds a stack canary to catch many buffer
+# overruns before they can corrupt control flow.
+# -D_FORTIFY_SOURCE=2 enables extra safety checks in libc wrappers such
+# as memcpy(), strcpy(), and snprintf() from glibc when the compiler can
+# validate them.
+# -Wl,-z,relro,-z,now and -Wl,-z,noexecstack tighten the ELF loader
+# protections for the output .so without changing the runtime logic.
+# $(PKG_CFLAGS) / $(PKG_LIBS) are intentionally empty for now: the patch
+# set does not link against a static D-Bus or proprietary SDK bundle.
 COMMON_CXXFLAGS := -std=c++11 \
                    --sysroot=$(SYSROOT) \
                    -march=armv7-a -mtune=cortex-a9 -mfpu=neon \
                    -fPIC \
                    -fvisibility=hidden \
+                   -fstack-protector-strong \
+                   -D_FORTIFY_SOURCE=2 \
+                   -Wall -Wextra \
                    -D_GLIBCXX_USE_CXX11_ABI=0 \
                    -Ipatches \
                    $(PKG_CFLAGS) \
                    $(EXTRA_CXXFLAGS)
 # EXTRA_CXXFLAGS: appended to every compile. E.g. verbose logs in a release lib:
 #   make ... EXTRA_CXXFLAGS='-DLOG_LEVEL=LOG_LEVEL_VERBOSE'
-# -D_GLIBCXX_USE_CXX11_ABI=0 selects the pre-C++11 (COW) std::string
-# and std::list ABI. The device ships libstdc++.so.6.0.14 (GCC 4.6
-# era) which only knows that ABI; libdbus-c++-1.so is linked against
-# it. Our toolchain is GCC 4.9.1 with libstdc++.so.6.0.20 which
-# defaults to the new SSO std::string ABI. Without this flag, any
-# std::string crossing the libdbus-c++ boundary (e.g. our
-# guidancePointData._1 assignment in hud_send.cpp) gets interpreted
-# with two different layouts and corrupts the heap — manifested as
-# a SEGV in std::has_facet when the corrupted bytes happened to land
-# in a libstdc++ locale _Impl. See git log for the crash analysis.
-#
-# Likewise -static-libstdc++ used to be on both lines. It was added
-# defensively ("the device's libstdc++ is older than ours") but in
-# practice it gave us two libstdc++ runtimes in the same process —
-# ours (statically baked) vs the device's (loaded via libdbus-c++-1).
-# Both had their own global C locale, both shared the heap, and the
-# ABI mismatch above corrupted state across the boundary. Dropping
-# it leaves us with one runtime (the device's 6.0.14), which is
-# also what libdbus-c++-1 uses, so all C++ stdlib state is shared
-# correctly. We pick up libstdc++.so.6 as a DT_NEEDED instead.
+# -D_GLIBCXX_USE_CXX11_ABI=0 selects the pre-C++11 (COW) std::string and
+# std::list ABI used by the CMU's GCC 4.6-era libstdc++. Without this flag,
+# a std::string crossing the OEM boundary can be interpreted with a different
+# layout and corrupt the shared heap.
+# We intentionally do not statically link a newer libstdc++ into the .so:
+# that would create two C++ runtimes in one process. The shim uses the CMU's
+# shipped runtime, matching the ABI used by the OEM libraries.
 COMMON_LDFLAGS  := --sysroot=$(SYSROOT) -shared \
                    -Wl,--no-undefined \
+                   -Wl,-z,relro,-z,now \
+                   -Wl,-z,noexecstack \
                    -lpthread -ldl -lrt \
                    $(PKG_LIBS)
 
@@ -130,11 +122,11 @@ $(addsuffix -debug,$(PATCHES)): %-debug: $(DEBUG_DIR)/libpatch-%.so
 #   build/release/<patch>/foo.o  <-  patches/<patch>/foo.cpp
 $(DEBUG_DIR)/%.o: patches/%.cpp
 	@mkdir -p $(@D)
-	$(CXX) -MD $(DEBUG_CXXFLAGS) -c $< -o $@
+	$(CXX) -MD -MP $(DEBUG_CXXFLAGS) -c $< -o $@
 
 $(RELEASE_DIR)/%.o: patches/%.cpp
 	@mkdir -p $(@D)
-	$(CXX) -MD $(RELEASE_CXXFLAGS) -c $< -o $@
+	$(CXX) -MD -MP $(RELEASE_CXXFLAGS) -c $< -o $@
 
 # Per-patch link rules generated via $(eval). Sources are discovered
 # recursively (via `find`) at parse time, so subdivision of a patch

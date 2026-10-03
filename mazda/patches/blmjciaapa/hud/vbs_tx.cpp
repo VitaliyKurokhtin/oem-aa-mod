@@ -92,7 +92,7 @@ struct NaviSnapshot {
     uint8_t  lanes[8];           // OEM lane codes: 0=hidden, 1..70 (mapped to glyphs at emit)
 };
 
-NaviSnapshot           g_snapshot   = {};
+NaviSnapshot           g_snapshot   = {"", 0u, 0, 0u, {0, 0, 0, 0, 0, 0, 0, 0}};
 std::atomic<uint32_t>  g_seq{0};
 std::condition_variable g_cv;
 std::mutex             g_cv_mu;
@@ -194,8 +194,8 @@ void send_one(const NaviSnapshot &cur,
     // `road` owns the bytes msg2.guidancePointName points at; it must
     // outlive the set_hud_msg2() call below (it does — the library
     // copies the string while marshalling).
-    VbsNaviHudDisplay disp = {};
-    VbsNaviHudMsg2    msg2 = {};
+    VbsNaviHudDisplay disp = {0u, 0u, 0u, 0u, 0u, 0u};
+    VbsNaviHudMsg2    msg2 = {nullptr, 0u};
     std::string       road;
 
     // A lane array carries no sync of its own — the HUD pairs it with the
@@ -356,7 +356,7 @@ void sender_teardown()
     // main frame blanks, and an empty-string Msg2 is non-trivial
     // (the producer hard-caps at 1 page).
     if (!g_hud_absent.load(std::memory_order_acquire)) {
-        VbsNaviHudDisplay clear = {};   // all fields zero
+        VbsNaviHudDisplay clear = {0u, 0u, 0u, 0u, 0u, 0u};   // all fields zero
         int rc = VBS_NAVI_SetHUDDisplayMsgReq(g_conn, &clear, nullptr, nullptr, nullptr);
         if (rc != 0) {
             LOGE("hud sender: clear-frame send failed rc=%d", rc);
@@ -403,7 +403,7 @@ void *sender_main(void *)
     g_active.store(true, std::memory_order_release);
     LOGD("hud sender: HUD plumbing ready");
 
-    NaviSnapshot prev = {};
+    NaviSnapshot prev = {"", 0u, 0, 0u, {0, 0, 0, 0, 0, 0, 0, 0}};
     uint8_t      sync_bit = 0;
     uint32_t     last_processed = 0;
 

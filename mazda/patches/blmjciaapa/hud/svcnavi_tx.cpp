@@ -76,7 +76,7 @@ struct NaviSnapshot {
     uint8_t  lanes[8];       // OEM lane codes: 0=hidden, 1..70 (svcjcinavi maps code->glyph)
 };
 
-NaviSnapshot            g_snapshot = {};
+NaviSnapshot            g_snapshot = {"", 0u, 0, 0u, {0, 0, 0, 0, 0, 0, 0, 0}};
 std::atomic<uint32_t>   g_seq{0};
 std::condition_variable g_cv;
 std::mutex              g_cv_mu;
