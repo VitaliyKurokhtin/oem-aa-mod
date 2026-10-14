@@ -51,7 +51,8 @@ constexpr char const *kDongleDevNames[] = {
     "motorolama1",
     "AutoKit",
     "Accessory",
-    "CAR2"
+    "CAR2",
+    "VehiConn"
 };
 
 // AapConnectionManager connect-mode values (instance + 0xdc). Offset and
@@ -75,15 +76,37 @@ constexpr const char *kNotificationMember = "ETCNotification";
 typedef int (*ProjStatusFn)(void *user, int ev, void *data);
 ProjStatusFn g_orig_proj_cb = nullptr;
 
-// Single-flight guard for the deferred activator: at most one poll
-// thread in flight at a time, re-armable per device connect once the
-// previous one has exited.
+// How long the activator waits for connect-mode==2 after each SETUP.
+// On a cold boot the OEM can take well over 3 s to reach pending-pair;
+// a window that closes first leaves the session parked on the "Enable
+// Android Auto" prompt. 30 s covers a cold start.
+constexpr int        kGracePolls  = 300;     // ~30 s ceiling to reach mode==2
+constexpr useconds_t kPollStepUs  = 100000;  // 100 ms poll interval
+
+// Deferred-activator state, all guarded by g_mu.
+//   g_activator_running - a poll thread exists (single-flight).
+//   g_armed             - the current connection still wants the bypass.
+//                         Cleared on success, natural activation, timeout,
+//                         device change, disconnect and session teardown.
+//   g_polls_left        - polls remaining before the window closes. Every
+//                         SETUP resets it, so a reconnect that lands while
+//                         the previous thread is still polling gets a full
+//                         window instead of the old thread's leftover time.
+//   g_arm_gen           - bumped on every SETUP. The thread only disarms
+//                         the generation it was polling for, so a re-arm
+//                         that races a disarm is never lost.
+// The thread decides to exit and clears g_activator_running in one
+// critical section, so a SETUP arriving at that moment either extends the
+// running thread or spawns a new one, never neither.
 pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 bool g_activator_running = false;
+bool g_armed             = false;
+int  g_polls_left        = 0;
+unsigned g_arm_gen       = 0;
 
 // Match known dongle names as case-insensitive substrings of the current
 // device name.
-bool is_known_device(const char* currentDeviceName) 
+bool is_known_device(const char* currentDeviceName)
 {
     if (currentDeviceName == nullptr) return false;
 
@@ -95,6 +118,14 @@ bool is_known_device(const char* currentDeviceName)
         }
     }
     return false;
+}
+
+// True if the bypass applies to `dev`: a recognized dongle, or any device
+// when the all-devices override is set.
+bool bypass_applies_to(const char *dev)
+{
+    return libpatch_config::bt_pairing_bypass_all_devices() ||
+           (dev != nullptr && is_known_device(dev));
 }
 
 void show_detected_device_notification(const char *device_name)
@@ -171,94 +202,142 @@ void show_detected_device_notification(const char *device_name)
 // pairing request, so the OEM parks at connect-mode 2 (pending-pair)
 // forever and video focus is never granted.
 //
-// This thread only ever runs for the dongle (the caller gates on
-// dev=="AAWireless", "smartBox" etc), so we watch for that exact stuck state. 
-// Each poll:
+// The thread is only armed for a connection the bypass applies to (the
+// caller gates on bypass_applies_to), so we watch for that exact stuck
+// state. Each poll:
+//   - if the window closed or the connection was disarmed, exit.
 //   - if AA already holds video focus, or mode==3 (activated), a genuine
 //     activation happened (GAL 1.5, or a pairing that did arrive) — do
 //     nothing.
-//   - if mode==2 (pending-pair) — this is the dongle parked waiting for
-//     the missing BT pairing — call ActivateAapSession(cm) directly,
-//     once. That is exactly the activation the missing pairing-result
-//     path performs (StartResourcesControl, ResumeLastMode,
-//     NotifyBTConnectionComplete, mode:=3); it takes no precondition.
+//   - if mode dropped back to idle after the connection was seen up, the
+//     device detached (e.g. the user pressed Cancel) — disarm. The SDK
+//     session lives for the whole jciAAPA process, so aap_destroy_session
+//     does NOT fire on a device disconnect; this is how we notice one.
+//   - if the device is no longer one the bypass applies to (a wired phone
+//     plugged in after the dongle left), disarm without injecting, so a
+//     genuine pairing is never cut short.
+//   - if mode==2 (pending-pair) — the dongle parked waiting for the
+//     missing BT pairing — call ActivateAapSession(cm) directly. That is
+//     exactly the activation the missing pairing-result path performs
+//     (StartResourcesControl, ResumeLastMode, NotifyBTConnectionComplete,
+//     mode:=3); it takes no precondition.
 //   - otherwise (mode 0 / transient) keep polling until the AOA session
 //     connects and mode becomes 2, up to the grace ceiling.
 // The connect-mode offset (0xdc) was empirically triangulated, so gating
-// on mode==2 is now safe. Single-flight guard + once-per-SETUP nature
-// prevent any double activation.
+// on mode==2 is safe. Activation sets mode to 3, which the next poll
+// treats as already activated, so one connection is never injected twice.
 void *activator_thread(void *)
 {
-    const int        kGraceTries = 30;     // ~3 s ceiling to reach mode==2
-    const useconds_t kStepUs     = 100000; // 100 ms poll interval
-
     LOGD("bt16pair: activator thread started (poll up to %d x %d ms for "
          "connect-mode==2, then force ActivateAapSession)",
-         kGraceTries, static_cast<int>(kStepUs / 1000));
+         kGracePolls, static_cast<int>(kPollStepUs / 1000));
 
-    bool injected = false;
-    for (int i = 0; i < kGraceTries; ++i) {
+    int      injected = 0;
+    int      polls    = 0;
+    bool     seen_up  = false;  // mode left idle at least once this arming
+    unsigned gen      = 0;
+    bool     have_gen = false;
+    for (;;) {
+        pthread_mutex_lock(&g_mu);
+        if (!g_armed || g_polls_left <= 0) {
+            bool timed_out = g_armed;
+            g_armed             = false;
+            g_activator_running = false;
+            pthread_mutex_unlock(&g_mu);
+            if (timed_out) {
+                // Grace elapsed without ever seeing the pending-pair state
+                // (or a natural activation). There is nothing to activate
+                // — do NOT blind-inject.
+                void *cm   = AapConnectionManager_instance();
+                int   mode = cm ? AapConnectionManager_connect_mode(cm) : -1;
+                LOGD("bt16pair: grace window elapsed without connect-mode==2 "
+                     "(final mode=%d); not injecting", mode);
+            }
+            break;
+        }
+        if (!have_gen || gen != g_arm_gen) {
+            // Freshly (re)armed by a SETUP: start the per-connection
+            // bookkeeping over.
+            gen      = g_arm_gen;
+            have_gen = true;
+            seen_up  = false;
+        }
+        --g_polls_left;
+        pthread_mutex_unlock(&g_mu);
+        ++polls;
+
         void *aap = Singleton_AapProc_GetInstance();
         void *vm  = aap ? AapProc_GetVideoManager(aap) : nullptr;
         int   focus = vm ? VideoManager_IsAAVideoInFocus(vm) : 0;
         void *cm  = AapConnectionManager_instance();
         int   mode = cm ? AapConnectionManager_connect_mode(cm) : -1;
+        const char *dev = cm ? AapConnectionManager_dev_name(cm) : nullptr;
 
-        LOGV("bt16pair: activator poll #%d/%d: aap=%p vm=%p focus=%d cm=%p "
-             "mode=%d", i + 1, kGraceTries, aap, vm, focus, cm, mode);
+        LOGV("bt16pair: activator poll #%d: aap=%p vm=%p focus=%d cm=%p "
+             "mode=%d dev=\"%s\"", polls, aap, vm, focus, cm, mode,
+             dev ? dev : "(null)");
 
-        // Natural activation already happened — nothing to do.
+        const char *disarm_reason = nullptr;
         if (focus || mode == kConnModeActivated) {
-            LOGD("bt16pair: AA activated on its own after ~%d ms "
-                 "(focus=%d mode=%d); no inject needed", i * 100, focus, mode);
-            break;
-        }
-
-        // The dongle-stuck state: AOA session up, parked waiting for a BT
-        // pairing that will never arrive. Force the activation the OEM
-        // would have run on pairing success.
-        if (cm && mode == kConnModePendingPair) {
-            LOGD("bt16pair: connect-mode==2 (pending-pair, dongle stuck) after "
-                 "~%d ms — forcing ActivateAapSession(cm=%p)", i * 100, cm);
+            disarm_reason = "AA activated";
+        } else if (mode == kConnModeIdle && seen_up) {
+            disarm_reason = "device detached (connect-mode back to idle)";
+        } else if (mode > kConnModeIdle && !bypass_applies_to(dev)) {
+            disarm_reason = "device is not one the bypass applies to";
+        } else if (cm && mode == kConnModePendingPair) {
+            // The dongle-stuck state: AOA session up, parked waiting for a
+            // BT pairing that will never arrive. Force the activation the
+            // OEM would have run on pairing success.
+            LOGD("bt16pair: connect-mode==2 (pending-pair, dongle stuck) on "
+                 "\"%s\" after poll #%d — forcing ActivateAapSession(cm=%p)",
+                 dev ? dev : "(null)", polls, cm);
             AapConnectionManager_ActivateAapSession(cm);
-            injected = true;
+            ++injected;
 
             void *vm2 = aap ? AapProc_GetVideoManager(aap) : nullptr;
             int   f2  = vm2 ? VideoManager_IsAAVideoInFocus(vm2) : 0;
             int   m2  = AapConnectionManager_connect_mode(cm);
             LOGD("bt16pair: post-inject AA video focus=%d mode=%d", f2, m2);
-            break;
+            disarm_reason = "activation injected";
+        }
+        if (mode > kConnModeIdle) seen_up = true;
+
+        if (disarm_reason) {
+            LOGD("bt16pair: activator disarming after poll #%d: %s "
+                 "(focus=%d mode=%d)", polls, disarm_reason, focus, mode);
+            pthread_mutex_lock(&g_mu);
+            // A SETUP that re-armed us during this poll belongs to a newer
+            // connection; leave it armed so the loop keeps serving it.
+            if (g_arm_gen == gen) {
+                g_armed = false;
+            }
+            pthread_mutex_unlock(&g_mu);
+            continue;
         }
 
-        usleep(kStepUs);
+        usleep(kPollStepUs);
     }
 
-    if (!injected) {
-        // Grace elapsed without ever seeing the pending-pair state (or a
-        // natural activation). The AOA session never reached mode==2, so
-        // there is nothing to activate — do NOT blind-inject.
-        void *cm   = AapConnectionManager_instance();
-        int   mode = cm ? AapConnectionManager_connect_mode(cm) : -1;
-        LOGD("bt16pair: grace window elapsed without connect-mode==2 "
-             "(final mode=%d); not injecting", mode);
-    }
-
-    pthread_mutex_lock(&g_mu);
-    g_activator_running = false;
-    pthread_mutex_unlock(&g_mu);
-    LOGD("bt16pair: activator thread exiting (injected=%d)", injected ? 1 : 0);
+    LOGD("bt16pair: activator thread exiting (injections=%d)", injected);
     return nullptr;
 }
 
+// Arm the bypass for the connection that just reached SETUP: reset the
+// grace window and make sure a poll thread is running. A thread already in
+// flight picks the new window up on its next poll.
 void spawn_activator_once(void)
 {
     pthread_mutex_lock(&g_mu);
+    g_armed      = true;
+    g_polls_left = kGracePolls;
+    ++g_arm_gen;
     bool spawn = !g_activator_running;
     if (spawn) g_activator_running = true;
     pthread_mutex_unlock(&g_mu);
 
     if (!spawn) {
-        LOGD("bt16pair: activator already in flight; not re-spawning");
+        LOGD("bt16pair: activator already in flight; reset its window to "
+             "%d polls", kGracePolls);
         return;
     }
 
@@ -270,6 +349,7 @@ void spawn_activator_once(void)
         LOGW("bt16pair: pthread_create failed; clearing single-flight guard");
         pthread_mutex_lock(&g_mu);
         g_activator_running = false;
+        g_armed             = false;
         pthread_mutex_unlock(&g_mu);
     }
 }
@@ -313,7 +393,7 @@ int our_projection_status_cb(void *user, int ev, void *data)
         show_detected_device_notification(dev);
     }
     
-    if (!all_devices && (!dev || !is_known_device(dev))) {
+    if (!bypass_applies_to(dev)) {
         LOGD("bt16pair: proj cb: SETUP but dev=\"%s\" is not known dongle; not arming",
              dev ? dev : "(null)");
         return rc;
@@ -355,4 +435,18 @@ void bt16pair_pre_aap_create_session(void *cb_list)
          "(proj status wrapper)",
          cb_list, kCbListProjSlot, reinterpret_cast<void *>(g_orig_proj_cb),
          reinterpret_cast<void *>(&our_projection_status_cb));
+}
+
+void bt16pair_pre_aap_destroy_session(void)
+{
+    // Disarm any in-flight activator so it can never act on a session the
+    // SDK is tearing down. The thread notices on its next poll (<=100 ms)
+    // and exits; it is detached, so nothing to join here.
+    pthread_mutex_lock(&g_mu);
+    bool was_armed = g_armed;
+    g_armed = false;
+    pthread_mutex_unlock(&g_mu);
+    if (was_armed) {
+        LOGD("bt16pair_pre_aap_destroy_session: disarmed in-flight activator");
+    }
 }

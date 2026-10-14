@@ -305,6 +305,13 @@ int aap_destroy_session(void *handle)
     LOGD("aap_destroy_session: ENTER handle=%p", handle);
     resolve_real_once();
 
+    // Stop the GAL-1.6 pairing-bypass activator before the SDK tears the
+    // session down. Not gated on g_session_up: the wrapper is installed
+    // before the real create, so it can be armed even if create failed.
+    if (g_enabled && libpatch_config::use_protocol_v1_6()) {
+        bt16pair_pre_aap_destroy_session();
+    }
+
     if (g_enabled) {
         pthread_mutex_lock(&g_session_mu);
         if (g_session_up) {

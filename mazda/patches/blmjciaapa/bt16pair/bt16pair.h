@@ -37,11 +37,17 @@
 #ifndef LIBPATCH_BLMJCIAAPA_BT16PAIR_BT16PAIR_H
 #define LIBPATCH_BLMJCIAAPA_BT16PAIR_BT16PAIR_H
 
-// Install the ProjectionStatusCb (cb_list slot 4) wrapper. Call from the
+// Install the ProjectionStatusCb (cb_list slot 3) wrapper. Call from the
 // aap_create_session shim, alongside hud_pre_aap_create_session, BEFORE
 // chaining to the real SDK entry point (the SDK memcpy's the table into
 // the session handle inside aap_create_session). Safe with cb_list==NULL
 // (no-op) and idempotent across aap_create_session retries.
 void bt16pair_pre_aap_create_session(void *cb_list);
+
+// Disarm the deferred activator. Call from the aap_destroy_session shim
+// BEFORE chaining to the real SDK teardown. Note the SDK session lives for
+// the whole jciAAPA process, so this covers service shutdown only; device
+// disconnects are detected by the activator itself. Idempotent.
+void bt16pair_pre_aap_destroy_session(void);
 
 #endif // LIBPATCH_BLMJCIAAPA_BT16PAIR_BT16PAIR_H
