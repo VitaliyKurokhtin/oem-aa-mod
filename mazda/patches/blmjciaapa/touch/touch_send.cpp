@@ -180,6 +180,16 @@ int insert_sorted(SnapEntry *arr, int n, int slot, const Finger &fg)
     return pos;
 }
 
+void reset_prev_state()
+{
+    for (int s = 0; s < kMaxFingers; ++s) {
+        g_prev.fingers[s].tracking_id = -1;
+        g_prev.fingers[s].x = 0;
+        g_prev.fingers[s].y = 0;
+    }
+    g_prev.n_active = 0;
+}
+
 } // namespace
 
 void touch_send_reset(void)
@@ -192,6 +202,16 @@ void touch_send_reset(void)
 
 void touch_on_frame(const MtState &cur)
 {
+    // If AA is not the foreground video target, we deliberately drop all touch
+    // events and discard the local diff baseline. When focus returns, the next
+    // frame starts a fresh touch sequence instead of replaying stale local state.
+    void *aap = Singleton_AapProc_GetInstance();
+    if (!aap || !VideoManager_IsAAVideoInFocus(AapProc_GetVideoManager(aap))) {
+        reset_prev_state();
+        g_prev_init = true;
+        return;
+    }
+
     if (!g_prev_init) {
         // One-shot init for g_prev. The "slot empty" sentinel is
         // tracking_id = -1, but `MtState g_prev;` at file scope is
@@ -205,12 +225,7 @@ void touch_on_frame(const MtState &cur)
         // slot. AA would silently drop the phantom UPs (no prior
         // DOWN to match) but the wire stream is malformed and
         // gesture detectors can react unpredictably.
-        for (int s = 0; s < kMaxFingers; ++s) {
-            g_prev.fingers[s].tracking_id = -1;
-            g_prev.fingers[s].x = 0;
-            g_prev.fingers[s].y = 0;
-        }
-        g_prev.n_active = 0;
+        reset_prev_state();
         g_prev_init = true;
         // Fall through into the normal diff path.
     }
@@ -252,21 +267,39 @@ void touch_on_frame(const MtState &cur)
          n_falling, n_rising, any_moved ? 1 : 0, n_survivors);
 
     // ----- Step 1: POINTER_UP / UP for each falling slot ------------
+    //
+    // Build a snapshot with ALL fingers that were alive in prev: survivors
+    // (continuing) plus all falling fingers (at their prev positions).
+    // Then iteratively peel off one falling finger per event. When the
+    // snapshot has >1 finger the action is POINTER_UP; the very last
+    // removal is UP.
+    SnapEntry up_snap[kMaxFingers];
+    memcpy(up_snap, survivors, sizeof(SnapEntry) * n_survivors);
+    int up_n = n_survivors;
+    for (int i = 0; i < n_falling; ++i) {
+        insert_sorted(up_snap, up_n, falling_slots[i],
+                      g_prev.fingers[falling_slots[i]]);
+        ++up_n;
+    }
+
     for (int i = 0; i < n_falling; ++i) {
         int slot = falling_slots[i];
 
-        // Snapshot: survivors + this falling finger (at its PREV pos
-        // with its PREV tracking_id), inserted in slot-sorted order.
-        SnapEntry snap[kMaxFingers];
-        memcpy(snap, survivors, sizeof(SnapEntry) * n_survivors);
-        int n = n_survivors;
-        int idx = insert_sorted(snap, n, slot, g_prev.fingers[slot]);
-        ++n;
+        // Find this finger in the snapshot.
+        int idx = -1;
+        for (int j = 0; j < up_n; ++j) {
+            if (up_snap[j].slot == slot) { idx = j; break; }
+        }
+        if (idx < 0) continue;  // should not happen
 
-        AAPTouchAction act = (n == 1) ? kAAPTouchActionUp
-                                      : kAAPTouchActionPointerUp;
-        int action_index = (n == 1) ? 0 : idx;
-        send_event(snap, n, act, action_index);
+        AAPTouchAction act = (up_n == 1) ? kAAPTouchActionUp
+                                         : kAAPTouchActionPointerUp;
+        int action_index = (up_n == 1) ? 0 : idx;
+        send_event(up_snap, up_n, act, action_index);
+
+        // Remove this finger from the snapshot for the next iteration.
+        for (int j = idx; j < up_n - 1; ++j) up_snap[j] = up_snap[j + 1];
+        --up_n;
     }
 
     // ----- Step 2: POINTER_DOWN / DOWN for each rising slot ---------
