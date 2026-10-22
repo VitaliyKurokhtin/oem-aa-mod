@@ -69,6 +69,14 @@
 //                                     touchscreen-while-driving tweak). Mechanism and addresses in
 //                                     patches/svcjcinavi/compass.cpp. Read by svcjcinavi
 //                                     (default false)
+//   hud_display_language = off|english|<code>
+//                                     force the "Display Characters" code the head unit sends
+//                                     to the instrument cluster / HUD (CMU control type 2), so
+//                                     the HUD shows the street name while the head-unit UI stays
+//                                     in a language whose code hides it (e.g. Hungarian = 21).
+//                                     english = 7; a number 1..255 sends that code; off/false/no/0
+//                                     leaves the OEM value untouched. Read by svcjciblmsettings
+//                                     (default off)
 //
 // Booleans are lenient (true/1/yes/on, false/0/no/off). hud_transport
 // also accepts "svcjcinavi" as an alias for "svcnavi".
@@ -265,6 +273,26 @@ inline uint32_t parse_nonnegative_meters(const char *val, uint32_t deflt)
     return static_cast<uint32_t>(meters);
 }
 
+// Parse hud_display_language: off/false/no/0 -> 0 (disabled),
+// english/en -> 7, a plain number 1..255 -> that code. Anything else
+// keeps deflt with a warning.
+inline uint8_t parse_display_language(const char *val, uint8_t deflt)
+{
+    if (val == nullptr) return deflt;
+    if (strcasecmp(val, "off") == 0 || strcasecmp(val, "false") == 0 ||
+        strcasecmp(val, "no")  == 0 || strcmp(val, "0") == 0)
+        return 0;
+    if (strcasecmp(val, "english") == 0 || strcasecmp(val, "en") == 0)
+        return 7;
+    char *end = nullptr;
+    unsigned long code = strtoul(val, &end, 10);
+    if (end != val && *end == '\0' && code >= 1 && code <= 255)
+        return static_cast<uint8_t>(code);
+    LOGW("config: unknown hud_display_language=\"%s\" — keeping %u",
+         val, static_cast<unsigned>(deflt));
+    return deflt;
+}
+
 // Lenient boolean parse. Case-insensitive:
 //   true  / 1 / yes / on  -> true
 //   false / 0 / no  / off -> false
@@ -303,6 +331,7 @@ struct Settings {
     bool         bt_pairing_bypass_all_devices = false;
     bool         bt_pairing_show_device_notification = false;
     bool         compass_always_on = false;
+    uint8_t      hud_display_language = 0;
     bool         loaded            = false;
 };
 
@@ -367,6 +396,9 @@ inline void apply_kv(const char *key, const char *val, void *ud)
             parse_bool(val, s.bt_pairing_show_device_notification);
     } else if (strcasecmp(key, "compass_always_on") == 0) {
         s.compass_always_on = parse_bool(val, s.compass_always_on);
+    } else if (strcasecmp(key, "hud_display_language") == 0) {
+        s.hud_display_language =
+            parse_display_language(val, s.hud_display_language);
     } else {
         // Common schema: a key this library doesn't act on is not an
         // error, just informational.
@@ -384,7 +416,7 @@ inline void log_effective(const char *prefix)
             "mute_pauses_phone=%s "
             "unmute_starts_playback=%s "
             "block_headunit_media_play=%s bt_pairing_bypass_all_devices=%s "
-            "bt_pairing_show_device_notification=%s compass_always_on=%s",
+            "bt_pairing_show_device_notification=%s compass_always_on=%s hud_display_language=%u",
          prefix,
          s.touch ? "true" : "false",
          s.hud   ? "true" : "false",
@@ -400,7 +432,8 @@ inline void log_effective(const char *prefix)
          s.block_headunit_media_play ? "true" : "false",
          s.bt_pairing_bypass_all_devices ? "true" : "false",
          s.bt_pairing_show_device_notification ? "true" : "false",
-         s.compass_always_on ? "true" : "false");
+         s.compass_always_on ? "true" : "false",
+         static_cast<unsigned>(s.hud_display_language));
 }
 
 // === Public API ===============================================
@@ -451,6 +484,7 @@ inline bool         block_headunit_media_play() { return settings().block_headun
 inline bool         bt_pairing_bypass_all_devices() { return settings().bt_pairing_bypass_all_devices; }
 inline bool         bt_pairing_show_device_notification() { return settings().bt_pairing_show_device_notification; }
 inline bool         compass_always_on() { return settings().compass_always_on; }
+inline uint8_t      hud_display_language() { return settings().hud_display_language; }
 
 } // namespace libpatch_config
 
