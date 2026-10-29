@@ -392,6 +392,59 @@ int main()
         }
     }
 
+    // --- Steps the HUD has no glyph for -> straight, never the stop marker 0 -
+    {
+        printf("[13] UNKNOWN / unmapped maneuver -> HUD_STRAIGHT\n");
+        AaGuidance g;
+        auto u = hx("80 06 0a 04 0a 02 08 00");           // type 0 UNKNOWN
+        hud_nav16_on_frame(u.data(), (int)u.size(), &g, nullptr);
+        CHECK_EQ_U(hud_nav16_glyph(&g), 1u, "0 UNKNOWN -> HUD_STRAIGHT");
+        auto x = hx("80 06 0a 04 0a 02 08 7f");           // type 127, not in the table
+        hud_nav16_on_frame(x.data(), (int)x.size(), &g, nullptr);
+        CHECK_EQ_U(hud_nav16_glyph(&g), 1u, "127 unmapped -> HUD_STRAIGHT");
+    }
+
+    // --- Roundabout ENTER / EXIT steps (43..46) ------------------------------
+    {
+        printf("[14] roundabout enter -> straight, exit CCW -> right, exit CW -> left\n");
+        AaGuidance g;
+        // Waze's real ROUNDABOUT_ENTER_CCW frame: type 45, exit 2, no angle.
+        auto w = hx("80 06 0a 06 0a 04 08 2d 10 02");
+        hud_nav16_on_frame(w.data(), (int)w.size(), &g, nullptr);
+        hud_nav16_format_guidance(&g, buf, sizeof(buf));
+        printf("  %s\n", buf);
+        CHECK_EQ_U(hud_nav16_glyph(&g), 1u, "45 RA_ENTER_CCW (Waze frame) -> HUD_STRAIGHT");
+        CHECK(strstr(buf, "maneuver=45(RA_ENTER_CCW)") != nullptr, "45 is named");
+
+        static const struct { const char *hex; unsigned exp; const char *msg; } kC[] = {
+            {"80 06 0a 04 0a 02 08 2b", 1u, "43 RA_ENTER_CW  -> HUD_STRAIGHT"},
+            {"80 06 0a 04 0a 02 08 2c", 2u, "44 RA_EXIT_CW   -> HUD_LEFT"},
+            {"80 06 0a 04 0a 02 08 2e", 3u, "46 RA_EXIT_CCW  -> HUD_RIGHT"},
+        };
+        for (unsigned i = 0; i < sizeof(kC)/sizeof(kC[0]); ++i) {
+            auto s = hx(kC[i].hex);
+            hud_nav16_on_frame(s.data(), (int)s.size(), &g, nullptr);
+            CHECK_EQ_U(hud_nav16_glyph(&g), kC[i].exp, kC[i].msg);
+        }
+    }
+
+    // --- OEM codes: ferries ---------------------------------------------------
+    {
+        printf("[15] ferries -> OEM ferry glyphs\n");
+        AaGuidance g;
+        static const struct { const char *hex; unsigned exp; const char *msg; } kC[] = {
+            {"80 06 0a 04 0a 02 08 25", 18u, "37 FERRY_BOAT        -> HUD_FERRY_BOAT"},
+            {"80 06 0a 04 0a 02 08 26", 26u, "38 FERRY_TRAIN       -> HUD_FERRY_TRAIN"},
+            {"80 06 0a 04 0a 02 08 30", 18u, "48 FERRY_BOAT_RIGHT  -> HUD_FERRY_BOAT"},
+            {"80 06 0a 04 0a 02 08 31", 26u, "49 FERRY_TRAIN_LEFT  -> HUD_FERRY_TRAIN"},
+        };
+        for (unsigned i = 0; i < sizeof(kC)/sizeof(kC[0]); ++i) {
+            auto s = hx(kC[i].hex);
+            hud_nav16_on_frame(s.data(), (int)s.size(), &g, nullptr);
+            CHECK_EQ_U(hud_nav16_glyph(&g), kC[i].exp, kC[i].msg);
+        }
+    }
+
     printf("\n%s\n", g_fail ? "RESULT: FAIL" : "RESULT: PASS");
     return g_fail;
 }

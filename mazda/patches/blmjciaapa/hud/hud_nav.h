@@ -23,18 +23,17 @@
 
 // === Mazda HUD turn-icon enum =================================
 //
-// Mirrors `NaviTurns` in reference hud.h. These are the integer
-// codes the HUD ECU interprets — the OEM glyph atlas is baked
-// into the ECU firmware and is out of our scope. Same numbering
-// as the reference, no remapping.
+// Maneuver glyph ids drawn by the HUD, as sent in the HUD frame's
+// nextManeuverInfo. Ids and names match the OEM navigation's own
+// maneuver mapping. 0 means no glyph; the OEM never sends 28, 29 or 61..63.
 enum MazdaIcon : uint8_t {
-    HUD_BLANK              = 0,    // HUD draws nothing (implicit blank; named for the 1.6 map)
+    HUD_BLANK              = 0,    // HUD draws nothing, no icon - what the OEM sends when it has none
     HUD_STRAIGHT            = 1,
     HUD_LEFT                = 2,
     HUD_RIGHT               = 3,
     HUD_SLIGHT_LEFT         = 4,
     HUD_SLIGHT_RIGHT        = 5,
-    HUD_UNDER_BRIDGE        = 6,
+    HUD_MOTORWAY            = 6,
     HUD_OFF_RAMP_RIGHT      = 7,
     HUD_DESTINATION         = 8,
     HUD_SHARP_RIGHT         = 9,
@@ -46,15 +45,17 @@ enum MazdaIcon : uint8_t {
     HUD_FORK_LEFT           = 15,
     HUD_MERGE_LEFT          = 16,
     HUD_MERGE_RIGHT         = 17,
-    HUD_EMPTY               = 18,
-    // 19 is empty
+    HUD_FERRY_BOAT          = 18,   // 18/19: the HUD draws no glyph and blanks all guidance but OEM nav still uses it
+    HUD_FERRY_BOAT_LEAVE    = 19,   // ferry with an arrow off it
     HUD_CROSS_RIGHT         = 20,
     HUD_CROSS_LEFT          = 21,
     HUD_MEDIAN_U_TURN_LEFT  = 22,
     HUD_MEDIAN_U_TURN_RIGHT = 23,
-    HUD_CAR                 = 24,
-    HUD_NO_CAR              = 25,
-    // 26..29 are empty
+    HUD_MOTOR_ROAD          = 24,   // road-for-motor-vehicles sign
+    HUD_MOTOR_ROAD_END      = 25,   // the same sign, crossed out
+    HUD_FERRY_TRAIN         = 26,   // 26/27: the HUD draws no glyph and blanks all guidance but OEM nav still uses it
+    HUD_FERRY_TRAIN_LEAVE   = 27,   // car on a rail wagon with an arrow off it
+    // 28,29 are empty
     HUD_OFF_RAMP_LEFT       = 30,
     HUD_T_LEFT              = 31,
     HUD_T_RIGHT             = 32,
@@ -65,7 +66,9 @@ enum MazdaIcon : uint8_t {
     // Roundabout exit-glyph bases (12 directional glyphs per traffic side); the
     // exit angle is added in roundabout_icon()/the 1.6 roundabout map. Named here
     // so the 1.6 glyph map has a single source for them (1.5 roundabout_icon below
-    // uses the same 37/49 offsets).
+    // uses the same 37/49 offsets). Both sets count the exit angle in the
+    // driving direction: glyph 52 (left-hand traffic, 90°) draws the exit at
+    // the left.
     HUD_ROUNDABOUT_CCW_BASE = 37,   // right-hand traffic, +round(angle/30) -> 37..48
     HUD_ROUNDABOUT_CW_BASE  = 49,   // left-hand  traffic, +round(angle/30) -> 49..60
 };

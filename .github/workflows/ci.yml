@@ -45,6 +45,12 @@ jobs:
       - name: Run config_test
         run: ./test/build/config_test
 
+      - name: Build merge_syncbit_test (host g++)
+        run: make -C test merge_syncbit_test
+
+      - name: Run merge_syncbit_test
+        run: ./test/build/merge_syncbit_test
+
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 20

@@ -42,11 +42,10 @@
 //     remembered OEM speed in and forward.
 //   * OEM-origin frame (speed != sentinel): remember its speed, then —
 //     while AAP is active — overwrite its (blank) maneuver block with
-//     the remembered AAP maneuver and forward. NNG's frame now carries
-//     AAP's turn + its own speed, identical to AAP's own frames. We do
-//     NOT touch text_ID3: svcjcinavi computes the sync bit for every
-//     frame and stamps the same value into both the maneuver frame and
-//     its paired street strip, so the value we see is already correct.
+//     the remembered AAP maneuver and align text_ID3 to the current AAP
+//     syncbit before forwarding. NNG's frame now carries AAP's turn and
+//     syncbit plus its own speed, matching AAP's current generation.
+//     When AAP is idle, the OEM frame passes through unchanged.
 //   * Street strip (Msg2): svcjcinavi emits it back-to-back right after
 //     the maneuver frame (same critical section, same generation), so
 //     the strip's origin is whatever the maneuver frame just before it
@@ -57,16 +56,11 @@
 //     empty street is stored as the empty string) and re-point the strip
 //     at our copy; on an OEM-origin generation while AAP owns the
 //     display we REPLACE the (blank NNG) street with the captured AAP
-//     street and pass it, so the street is re-asserted identically at
-//     both
-//     cadences — flicker-free, same as the maneuver. AAP-idle strips
-//     pass untouched. We only ever rewrite the street STRING, never the
-//     strip's syncBit: svcjcinavi stamps the same per-generation sync
-//     into both the maneuver frame's text_ID3 and this strip's syncBit
-//     in one critical section, and that pairing is what tells the HUD
-//     the two updates go together. We leave both untouched, so the
-//     spliced street rides on the current generation's sync and still
-//     matches the (also-spliced) maneuver frame.
+//     street and align syncBit to the current AAP generation. This keeps
+//     the maneuver frame's text_ID3 and its paired street-strip syncBit
+//     equal, so both updates belong to the same HUD generation. AAP-idle
+//     strips pass untouched. Reasserting identical maneuver/street content
+//     at both cadences is flicker-free.
 //
 // If the card is out, NNG never runs, this process never exists, and
 // the library is simply never loaded. If AAP is not active, the OEM
@@ -153,11 +147,14 @@ const char *g_cur_street = nullptr;
 
 // Merge state — all accessed only from svcjcinavi's single sender
 // thread (thUpdateGuidanceChangeToHUD), so plain variables are safe.
-bool     g_have_aap   = false;
-uint32_t g_aap_man    = 0;
-uint16_t g_aap_dist   = 0;
-uint8_t  g_aap_dunit  = 0;
-time_t   g_aap_last   = 0;
+bool     g_have_aap     = false;
+uint32_t g_aap_man      = 0;
+uint16_t g_aap_dist     = 0;
+uint8_t  g_aap_dunit    = 0;
+time_t   g_aap_last     = 0;
+uint32_t g_aap_last_man = 0;
+uint8_t  g_aap_syncbit  = 0;
+uint8_t  g_oem_syncbit  = 0;
 
 // What the street-strip hook should do with the strip svcjcinavi emits
 // back-to-back right after each maneuver frame. Set by the maneuver
@@ -294,7 +291,10 @@ int VBS_NAVI_SetHUDDisplayMsgReq(void *conn, VbsNaviHudDisplay *disp,
             // (and its blank street strip) through so the HUD clears.
             g_have_aap         = false;
             g_street_action    = STREET_PASSTHROUGH;
-            LOGV("AAP empty frame (man=0): releasing AAP ownership");
+            g_aap_syncbit      = 0;
+            g_aap_last_man     = 0;
+            LOGV("AAP empty frame (man=0, syncbit=0, oem_syncbit=%u): releasing AAP ownership",
+                 static_cast<unsigned>(disp->text_ID3));
         } else {
             // Real AAP guidance: capture the maneuver block and (re)arm
             // the activity window.
@@ -304,12 +304,24 @@ int VBS_NAVI_SetHUDDisplayMsgReq(void *conn, VbsNaviHudDisplay *disp,
             g_have_aap  = true;
             g_aap_last  = time(nullptr);
 
+            const bool g_oem_syncbit_changed = disp->text_ID3 != g_oem_syncbit;
+            g_oem_syncbit = disp->text_ID3;
+
+            if (g_aap_syncbit == 0) {
+                g_aap_syncbit = disp->text_ID3 ? disp->text_ID3 : 1;
+            } else if (g_aap_man != g_aap_last_man || g_oem_syncbit_changed) {
+                g_aap_syncbit = static_cast<uint8_t>((g_aap_syncbit % 7) + 1);
+            }
+            g_aap_last_man = g_aap_man;
+            disp->text_ID3 = g_aap_syncbit;
+
             // The strip that follows is AAP's street: capture it.
             g_street_action = STREET_CAPTURE;
 
-            LOGV("AAP frame: man=%u dist=%u  splice speed=0x%x unit=%u",
+            LOGV("AAP frame: man=%u dist=%u  splice speed=0x%x unit=%u syncbit=%u oem_syncbit=%u",
                  static_cast<unsigned>(g_aap_man), static_cast<unsigned>(g_aap_dist),
-                 static_cast<unsigned>(g_oem_speed), static_cast<unsigned>(g_oem_sunit));
+                 static_cast<unsigned>(g_oem_speed), static_cast<unsigned>(g_oem_sunit),
+                 static_cast<unsigned>(g_aap_syncbit), static_cast<unsigned>(g_oem_syncbit));
         }
 
         // Splice the remembered OEM speed into the AAP frame either way.
@@ -318,8 +330,7 @@ int VBS_NAVI_SetHUDDisplayMsgReq(void *conn, VbsNaviHudDisplay *disp,
     } else {
         // OEM-origin frame: remember its speed; while AAP is active,
         // overwrite its (blank) maneuver with AAP's so it stops
-        // blanking and becomes an identical re-assertion. text_ID3 is
-        // left as svcjcinavi computed it.
+        // blanking and becomes an identical re-assertion.
         g_oem_speed = disp->displaySpeedLimit;
         g_oem_sunit = disp->displaySpeedUnit;
 
@@ -329,9 +340,17 @@ int VBS_NAVI_SetHUDDisplayMsgReq(void *conn, VbsNaviHudDisplay *disp,
             disp->distanceUnit     = g_aap_dunit;
             // Overwrite the OEM strip that follows with AAP's street.
             g_street_action = STREET_REPLACE;
-            LOGV("OEM frame: speed=0x%x unit=%u  spliced AAP man=%u dist=%u",
+
+            // Align text_ID3 to the current AAP generation so that OEM re-assertions
+            // match the AAP frame's SyncBit, keeping display updates identical.
+            if (g_aap_syncbit != 0) {
+                disp->text_ID3 = g_aap_syncbit;
+            }
+
+            LOGV("OEM frame: speed=0x%x unit=%u  spliced AAP man=%u dist=%u syncbit=%u oem_syncbit=%u",
                  static_cast<unsigned>(g_oem_speed), static_cast<unsigned>(g_oem_sunit),
-                 static_cast<unsigned>(g_aap_man), static_cast<unsigned>(g_aap_dist));
+                 static_cast<unsigned>(g_aap_man), static_cast<unsigned>(g_aap_dist),
+                 static_cast<unsigned>(disp->text_ID3), static_cast<unsigned>(g_oem_syncbit));
         } else {
             g_street_action = STREET_PASSTHROUGH;
             LOGV("OEM frame (AAP idle): speed=0x%x unit=%u — passthrough",
@@ -358,10 +377,9 @@ int VBS_NAVI_TMC_SetHUD_Display_Msg2(void *conn, VbsNaviHudMsg2 *msg2,
     // svcjcinavi emits the street strip back-to-back right after its
     // maneuver frame, so the maneuver hook has tagged this strip's
     // origin. Mirror the maneuver handling: capture AAP's street, or
-    // overwrite the OEM strip with it. We rewrite only the street
-    // STRING — never syncBit: it is the current generation's sync,
-    // matching the maneuver frame's text_ID3, and that pairing is how
-    // the HUD knows the maneuver and street belong together.
+    // overwrite the OEM strip with it. We also align syncBit to
+    // g_aap_syncbit to match the maneuver frame's text_ID3, because that
+    // pairing is how the HUD knows the maneuver and street belong together.
     if (g_street_action == STREET_CAPTURE) {
         // Record AAP's street. Prefer the OEM's un-blanked
         // current_StreetName (g_cur_street): in markets that blank the
@@ -380,11 +398,19 @@ int VBS_NAVI_TMC_SetHUD_Display_Msg2(void *conn, VbsNaviHudMsg2 *msg2,
         // blank — identical to the OEM-cadence REPLACE below, so the two
         // cadences stay flicker-free.
         msg2->guidancePointName = g_aap_street;
-        LOGV("Msg2 capture: AAP street \"%s\"%s", g_aap_street,
-             g_cur_street ? " (current_StreetName)" : " (strip)");
+        if (g_aap_syncbit != 0) {
+            msg2->syncBit = g_aap_syncbit;
+        }
+        LOGV("Msg2 capture: AAP street \"%s\"%s (syncbit=%u oem_syncbit=%u)", g_aap_street,
+             g_cur_street ? " (current_StreetName)" : " (strip)",
+             static_cast<unsigned>(msg2->syncBit), static_cast<unsigned>(g_oem_syncbit));
     } else if (g_street_action == STREET_REPLACE) {
         msg2->guidancePointName = g_aap_street;
-        LOGV("Msg2 replace: OEM strip -> AAP street \"%s\"", g_aap_street);
+        if (g_aap_syncbit != 0) {
+            msg2->syncBit = g_aap_syncbit;
+        }
+        LOGV("Msg2 replace: OEM strip -> AAP street \"%s\" (syncbit=%u oem_syncbit=%u)",
+             g_aap_street, static_cast<unsigned>(msg2->syncBit), static_cast<unsigned>(g_oem_syncbit));
     }
 
     return g_real_msg2(conn, msg2, unused, cb, user);
