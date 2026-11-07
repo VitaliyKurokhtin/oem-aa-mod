@@ -184,6 +184,22 @@ void *reader_main(void *)
             LOGD("touch reader: stop signalled");
             break;
         }
+        if (pfds[0].revents & (POLLHUP | POLLERR | POLLNVAL)) {
+            // The evdev fd can disappear while the app is still in a session.
+            // Reset the tracked contact state so we don't leave a finger stuck
+            // "down" on the AAP side, then reopen the device and continue.
+            LOGW("touch reader: input fd lost (revents=0x%x) — resetting state",
+                 pfds[0].revents);
+            init_state(&cur);
+            touch_on_frame(cur);
+            close(fd);
+            fd = open_touch_device();
+            if (fd < 0) {
+                LOGD("touch reader: device unavailable after HUP/ERR — exiting");
+                return nullptr;
+            }
+            continue;
+        }
         if (!(pfds[0].revents & POLLIN)) continue;
 
         struct input_event ev;
