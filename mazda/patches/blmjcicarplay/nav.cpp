@@ -363,6 +363,14 @@ extern "C" void nav_on_devmgr_msg(const void *msgp, long n)
         if (g_last_head_valid) {
             int sel = select_by_head(g_last_head);
             if (sel >= 0) emit_selection(sel);
+        } else if (g_buf_count > 0) {
+            // [VIETMAP-FALLBACK] Some CarPlay Maps apps (notably VietMap) stream 0x8059
+            // maneuvers but leave the guidance active-maneuverList (iAP2 TLV 0x000D /
+            // @0x458,@0x656) empty. Without a head we previously never called
+            // emit_selection, so the HUD stayed blank forever. Bootstrap on the first
+            // displayable entry; a later real head (Apple Maps) still overrides.
+            LOGD("nav MAN bootstrap sel=0 (no guidance head yet, buf=%d)", g_buf_count);
+            emit_selection(0);
         }
 
     } else if (mt == kMtGuidance) {
@@ -381,6 +389,11 @@ extern "C" void nav_on_devmgr_msg(const void *msgp, long n)
                 emit_selection(sel);
             }
             // sel < 0: head not buffered yet (mid-rebuild / transient ~0.2%) -> KEEP previous selection.
+        } else if (g_buf_count > 0 && !g_last_head_valid) {
+            // [VIETMAP-FALLBACK] Guidance distance ticks arrive, but maneuverList count is 0.
+            // Keep painting the first buffered turn so the HUD is not stuck blank.
+            LOGD("nav GUIDE bootstrap sel=0 (maneuverList cnt=0, buf=%d)", g_buf_count);
+            emit_selection(0);
         }
         // Distance readout (independent of selection).
         if (n >= kGuidanceDistOff + 4) {
