@@ -22,6 +22,7 @@ oem-aa-mod-<version>/
   libpatch-svcjcinavi.so              # -> /data_persist/oem-aa-mod/ (optional; HUD merge)
   libpatch-aap_service.so             # -> /data_persist/oem-aa-mod/ (optional; protocol v1.6)
   libpatch-blmjcicarplay.so           # -> /data_persist/oem-aa-mod/ (optional; CarPlay HUD nav)
+  libpatch-svcjcimmui.so              # -> /data_persist/oem-aa-mod/ (optional; Audio Off fallback)
   resources/
     aap_system_attributes.xml         # -> /etc/
     aap_system_attributes_UCP.xml     # -> /etc/
@@ -190,6 +191,17 @@ block in `sm.conf` and add both env vars inside it:
 > both yields a duplicate `LD_PRELOAD` that crash-loops the service. It's
 > also wise to set `reset_board="no"` on the `jciCARPLAY` service so a
 > shim fault restarts only CarPlay instead of rebooting the unit.
+
+**`jciMMUI`** (optional — Audio Off fallback when CP/AA disconnect would
+otherwise land on FM). Needs `fallback_audio_off = true` in
+`libpatch.conf` (default off in code; on in the shipped sample conf):
+
+```xml
+<service type="jci_service" name="jciMMUI" path="/jci/mmui/svcjcimmui.so" …>
+    <environ_var env_name="LD_PRELOAD"
+                 env_value="/data_persist/oem-aa-mod/libpatch-svcjcimmui.so"/>
+</service>
+```
 
 **Enable nav advertisement** so CarPlay offers guidance to the HUD — set
 `NaviSupported` to `TRUE` in `/etc/devmgr_config_master.xml` (back it up

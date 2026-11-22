@@ -25,9 +25,10 @@ Or use the VS Code tasks (`Ctrl+Shift+B` runs **Build Release**).
 
 Outputs land at `mazda/build/{debug,release}/libpatch-<name>.so` (one
 per patch — currently `libpatch-blmjciaapa.so`, `libpatch-svcjcinavi.so`,
-and `libpatch-aap_service.so`). The `libpatch-` prefix is project convention
-so a quick `ls /jci/lib/libpatch-*` on the device shows everything we
-ship without colliding with stock OEM libraries.
+`libpatch-aap_service.so`, `libpatch-blmjcicarplay.so`, and
+`libpatch-svcjcimmui.so`). The `libpatch-` prefix is project convention
+so a quick `ls /data_persist/oem-aa-mod/libpatch-*` on the device shows
+everything we ship without colliding with stock OEM libraries.
 
 ## Adding a new patch target
 

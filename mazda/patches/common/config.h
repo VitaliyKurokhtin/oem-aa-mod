@@ -11,7 +11,7 @@
 // One schema, split across TWO deployed files (both live in the same
 // on-device folder as the .so libraries):
 //   * libpatch.conf         — the Android Auto family: blmjciaapa, svcjcinavi,
-//                             aap_service.
+//                             aap_service, plus svcjcimmui (Audio Off fallback).
 //   * libpatch-carplay.conf — blmjcicarplay (the CarPlay -> HUD bridge).
 // Each library passes the filename it wants to load() (the AA family uses the
 // default). AA and CarPlay run in DIFFERENT processes, so each reads only its
@@ -42,6 +42,10 @@
 //   block_headunit_media_play = true|false
 //                                     block head-unit-generated Android Auto MEDIA_PLAY events
 //                                     and startup audio restoration (default false)
+//   fallback_audio_off = true|false   when CarPlay/AA/USB disconnect (or reconnect timer
+//                                     expires) would fall back to FM/AM/SiriusXM, select
+//                                     stock Audio Off (NONE) instead; read by svcjcimmui
+//                                     (default false)
 //   carplay_vn_normalize = true|false fold Vietnamese 3-byte UTF-8 street-name letters to the
 //                                     2-byte/ASCII forms the HUD font can render; read by
 //                                     blmjcicarplay (default true)
@@ -250,6 +254,7 @@ struct Settings {
     bool         aa_audio_low_latency  = false;
     bool         mute_pauses_phone     = true;
     bool         block_headunit_media_play = false;
+    bool         fallback_audio_off = false;    // svcjcimmui: Audio Off instead of FM on disconnect
     bool         carplay_vn_normalize = true;   // blmjcicarplay: fold VN 3-byte street names for the HUD font
     bool         carplay_speed_limit  = false;  // blmjcicarplay: read + show the posted speed limit
     bool         carplay_udpd_launch  = true;   // blmjcicarplay: auto-launch splim_udpd (only when speed_limit)
@@ -305,6 +310,8 @@ inline void apply_kv(const char *key, const char *val, void *ud)
     } else if (strcasecmp(key, "block_headunit_media_play") == 0) {
         s.block_headunit_media_play =
             parse_bool(val, s.block_headunit_media_play);
+    } else if (strcasecmp(key, "fallback_audio_off") == 0) {
+        s.fallback_audio_off = parse_bool(val, s.fallback_audio_off);
     } else if (strcasecmp(key, "carplay_vn_normalize") == 0) {
         s.carplay_vn_normalize = parse_bool(val, s.carplay_vn_normalize);
     } else if (strcasecmp(key, "carplay_speed_limit") == 0) {
@@ -330,6 +337,7 @@ inline void log_effective(const char *prefix)
     LOGD("config: %s touch=%s hud=%s hud_transport=%s force_street_name=%s "
          "hud_fold_latin=%s use_protocol_v1_6=%s aa_audio_low_latency=%s "
          "mute_pauses_phone=%s block_headunit_media_play=%s "
+         "fallback_audio_off=%s "
          "carplay_vn_normalize=%s carplay_speed_limit=%s carplay_udpd_launch=%s "
          "carplay_nav_diag=%s carplay_msgtype_diag=%s carplay_hud_debug=%s",
          prefix,
@@ -342,6 +350,7 @@ inline void log_effective(const char *prefix)
          s.aa_audio_low_latency ? "true" : "false",
          s.mute_pauses_phone ? "true" : "false",
          s.block_headunit_media_play ? "true" : "false",
+         s.fallback_audio_off ? "true" : "false",
          s.carplay_vn_normalize ? "true" : "false",
          s.carplay_speed_limit ? "true" : "false",
          s.carplay_udpd_launch ? "true" : "false",
@@ -393,6 +402,7 @@ inline bool         use_protocol_v1_6() { return settings().use_protocol_v1_6; }
 inline bool         aa_audio_low_latency() { return settings().aa_audio_low_latency; }
 inline bool         mute_pauses_phone() { return settings().mute_pauses_phone; }
 inline bool         block_headunit_media_play() { return settings().block_headunit_media_play; }
+inline bool         fallback_audio_off() { return settings().fallback_audio_off; }
 inline bool         carplay_vn_normalize() { return settings().carplay_vn_normalize; }
 inline bool         carplay_speed_limit()  { return settings().carplay_speed_limit; }
 inline bool         carplay_udpd_launch()  { return settings().carplay_udpd_launch; }

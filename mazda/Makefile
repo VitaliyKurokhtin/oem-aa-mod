@@ -28,7 +28,7 @@ CXX         := $(M3TOOLCHAIN)/bin/$(TRIPLE)-g++
 SYSROOT     := $(M3TOOLCHAIN)/$(TRIPLE)/sysroot
 
 # OEM libraries we patch. Order doesn't matter.
-PATCHES := blmjciaapa svcjcinavi aap_service blmjcicarplay
+PATCHES := blmjciaapa svcjcinavi aap_service blmjcicarplay svcjcimmui
 
 # Per-patch extra compile flags, applied ONLY to that patch's objects (see
 # gen_patch_rules below). Leave a patch out of this list to build it with just

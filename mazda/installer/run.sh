@@ -213,13 +213,18 @@ then
     do
       cp "${MYDIR}/${file}" "${MOD_DIR}/" && echo "${file} has been copied"
     done
-    cp "${MYDIR}/resources/libpatch.conf" "${MOD_DIR}/" && echo "libpatch.conf has been copied"
   fi
   if includes_carplay
   then
     cp "${MYDIR}/libpatch-blmjcicarplay.so" "${MOD_DIR}/" && echo "libpatch-blmjcicarplay.so has been copied"
     cp "${MYDIR}/resources/libpatch-carplay.conf" "${MOD_DIR}/" && echo "libpatch-carplay.conf has been copied"
   fi
+  # Audio Off fallback (svcjcimmui) applies to both AA and CarPlay disconnect
+  # paths; it reads fallback_audio_off from libpatch.conf.
+  if [ -f "${MYDIR}/libpatch-svcjcimmui.so" ]; then
+    cp "${MYDIR}/libpatch-svcjcimmui.so" "${MOD_DIR}/" && echo "libpatch-svcjcimmui.so has been copied"
+  fi
+  cp "${MYDIR}/resources/libpatch.conf" "${MOD_DIR}/" && echo "libpatch.conf has been copied"
   chmod 0644 "${MOD_DIR}"/libpatch-*.so
 
   # --- Install the shared speed-limit UDP daemon (splim_udpd) ------------
@@ -248,6 +253,12 @@ then
     echo "--- patching CarPlay ---"
     patch_service jciCARPLAY "${MOD_DIR}/libpatch-blmjcicarplay.so" \
       '            <environ_var env_name="LD_LIBRARY_PATH" env_value="/jci/lib:/usr/lib"/>'
+  fi
+
+  # jciMMUI hosts libjciuiasystem.so (source fallback / Audio Off).
+  if [ -f "${MOD_DIR}/libpatch-svcjcimmui.so" ]; then
+    echo "--- patching jciMMUI (Audio Off fallback) ---"
+    patch_service jciMMUI "${MOD_DIR}/libpatch-svcjcimmui.so"
   fi
 
   # --- Android Auto: install patched XML system attributes ---------------
@@ -307,6 +318,7 @@ else
         unpatch_service jciAAPA    libpatch-blmjciaapa.so
         unpatch_service jcinavi    libpatch-svcjcinavi.so
         unpatch_service jciCARPLAY libpatch-blmjcicarplay.so
+        unpatch_service jciMMUI    libpatch-svcjcimmui.so
         # the CarPlay LD_LIBRARY_PATH line has no .so token; strip it explicitly
         grep -v 'LD_LIBRARY_PATH.*jci/lib:/usr/lib' "$conf" > /tmp/oaam.clean && cp /tmp/oaam.clean "$conf"
         rm -f /tmp/oaam.clean
@@ -368,7 +380,7 @@ else
   # --- Remove installed libraries and config -----------------------------
   if includes_aa
   then
-    for file in libpatch-blmjciaapa.so libpatch-svcjcinavi.so libpatch.conf
+    for file in libpatch-blmjciaapa.so libpatch-svcjcinavi.so
     do
       rm -f "${MOD_DIR}/${file}" && echo "Removed ${file}"
     done
@@ -389,12 +401,31 @@ else
     rm -f /data_persist/splim_udpd_start.sh && echo "Removed splim_udpd_start.sh"
   fi
 
+  # Shared Audio Off fallback stays while any AA/CarPlay shim remains.
+  aa_gone=0
+  cp_gone=0
+  [ ! -e "${MOD_DIR}/libpatch-blmjciaapa.so" ] &&
+    [ ! -e "${MOD_DIR}/libpatch-svcjcinavi.so" ] && aa_gone=1
+  [ ! -e "${MOD_DIR}/libpatch-blmjcicarplay.so" ] && cp_gone=1
+  if [ "$aa_gone" -eq 1 ] && [ "$cp_gone" -eq 1 ]
+  then
+    unpatch_service jciMMUI libpatch-svcjcimmui.so
+    for conf in /jci/sm/sm.conf /jci/sm/sm_WCP.conf
+    do
+      [ -f "$conf" ] || continue
+      sed -i '/name="jciMMUI"/ s/reset_board="no"/reset_board="yes"/' "$conf"
+    done
+    rm -f "${MOD_DIR}/libpatch-svcjcimmui.so" "${MOD_DIR}/libpatch.conf"
+    echo "Removed libpatch-svcjcimmui.so and libpatch.conf"
+  fi
+
   # Once the last feature is gone, restore the pristine service configs and
   # remove the shared backups left by feature-only uninstalls.
   if [ "$MODE" != "both" ] &&
      [ ! -e "${MOD_DIR}/libpatch-blmjciaapa.so" ] &&
      [ ! -e "${MOD_DIR}/libpatch-svcjcinavi.so" ] &&
-     [ ! -e "${MOD_DIR}/libpatch-blmjcicarplay.so" ]
+     [ ! -e "${MOD_DIR}/libpatch-blmjcicarplay.so" ] &&
+     [ ! -e "${MOD_DIR}/libpatch-svcjcimmui.so" ]
   then
     for conf in /jci/sm/sm.conf /jci/sm/sm_WCP.conf
     do
