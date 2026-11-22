@@ -1,0 +1,15 @@
+---
+description: Use tmp/mazda_cmu_fw and tmp/vietmap_ipa_extract for CMU/VietMap RE
+alwaysApply: true
+---
+
+# Local RE artifacts (`tmp/`)
+
+For **Mazda CMU OEM** or **VietMap Live / `vietmap_hud_sdk`** reverse engineering, use the gitignored trees under **`oem-aa-mod/tmp/`** (not macOS `/tmp` unless symlinked):
+
+- `tmp/mazda_cmu_fw/` — CMU150 **`74.00.324A`**: `bins/blmjcicarplay.so`, `rootfs_probe/`, `rootfs1.tar`, update zips.
+- `tmp/vietmap_ipa_extract/` — `Payload/Runner.app/Frameworks/vietmap_hud_sdk.framework/vietmap_hud_sdk` (arm64).
+
+Full layout, commands, and mirrors: [knowledge/agent-tmp-artifacts.md](../../knowledge/agent-tmp-artifacts.md).
+
+Rules: verify paths exist before RE; prefer small extracts over unpacking multi-GB archives; never commit `tmp/`; document findings in English under `knowledge/`.

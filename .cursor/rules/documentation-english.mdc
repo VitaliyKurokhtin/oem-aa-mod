@@ -1,0 +1,12 @@
+---
+description: Write project documentation in English
+alwaysApply: true
+---
+
+# Documentation language (English)
+
+- Write all **new and updated** project documentation in **English**, including `knowledge/`, `docs/`, README files, architecture notes, handover docs, and inline comments meant for future maintainers.
+- Use clear technical English; keep proper nouns, product names, API symbols, and file paths as in the codebase (`VIETMAP LIVE`, `vietmap_hud_sdk`, `FFF0`, etc.).
+- Preserve existing **English** content when editing; translate any remaining non-English prose to English in the same change.
+- Vietnamese (or other languages) is allowed only when quoting user-facing UI strings from the app verbatim, or when explicitly requested for a localized doc (suffix e.g. `.vi.md`).
+- Prefer consistent headings, tables, and code blocks; link related docs with relative paths under `knowledge/` or `docs/`.
