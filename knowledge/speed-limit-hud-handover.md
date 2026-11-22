@@ -74,7 +74,7 @@ Framework: `vietmap_hud_sdk` (Pods / DJ-style stack).
 - Phone = BLE **Central**; accessory = **Peripheral**.
 - GATT-style UUIDs observed: `FFF0` … `FFF4`.
 - Nav send APIs include direction, distance, roads, remain time/distance, **currentSpeed**.
-- Camera / limit-related sends: e.g. `sendCameraInformationWithType:andDistance:andLimitSpeed:`.
+- Camera / limit: `sendCameraInformationWithType:andDistance:andLimitSpeed:` → BLE **CMD `0x01`**, 4-byte payload (limit = u8 km/h). See [vietmap-hud-sdk-decompile.md](vietmap-hud-sdk-decompile.md).
 - Product fit: VietMap accessory HUDs (e.g. **H50**), not Mazda cluster.
 
 **Implication:** ESP32 can **spoof** that accessory to receive limit (+ other nav) without jailbreaking VietMap.
@@ -232,7 +232,7 @@ Single writer to `splim` only.
 
 ## 8. Open risks / unknowns
 
-1. **Exact VietMap BLE wire format** — must RE from `vietmap_hud_sdk` and/or sniff H50 (names, UUIDs, packet layout for `LimitSpeed`).
+1. **VietMap BLE wire format (baseline)** — documented from `vietmap_hud_sdk` RE (2026-11-23): `FFF0`/`FFF1`/`FFF2`, `C3` framing, CMD `0x01` limit byte. Remaining risk: app version drift and UID/checksum edge cases; validate against a real H50 capture when available.
 2. **CMU USB auth / hub** — some ports or `usb_authd` may block unknown devices until rules/modprobe adjusted.
 3. **C3 USB-Serial-JTAG vs app CDC** — confirm data channel usable while BLE runs; S3 TinyUSB may be cleaner.
 4. **`splim_udpd` docs vs code** — Makefile/docs claim write-to-`splim`; **code does not** — fix if reusing UDP.

@@ -89,9 +89,9 @@ App does **not** filter by UUID in adv packets; scan uses `services: nil`.
 |------|----------|-----------|------|
 | Service `FFF0` | — | — | Main HUD |
 | `FFF1` | Notify | ESP → app | HUDInfo, responses |
-| `FFF2` | Write / Write NR | app → ESP | Primary command frames |
-| `FFF3` | Write / Write NR | app → ESP | Secondary write path (some app builds) |
-| `FFF4` | Notify | ESP → app | Spare (TPMS branch on real HUD) |
+| `FFF2` | Write / Write NR | app → ESP | **Primary write** for HUD accessories (`currentCharacteristic` on iOS) |
+| `FFF3` | Write / Write NR | app → ESP | Write path only when peripheral **name contains `TPMS`** (not `VIETMAP-HUD`) |
+| `FFF4` | Notify | ESP → app | Notify path for **TPMS** branch |
 
 Auxiliary service **`FFFF`** / char `9ABC` (H50): firmware still exposes for experiments; iOS usually uses **`FFF0`** after connect.
 
@@ -126,16 +126,21 @@ Details: [vietmap-hud-sdk-decompile.md](vietmap-hud-sdk-decompile.md).
 
 1. `connectDeviceWithPeripheral:` → `connectPeripheral:options:nil`.
 2. `didConnectPeripheral` → `stopScan`, `discoverServices:nil`.
-3. Subscribe notify `FFF1`, discover `FFF2`/`FFF3`.
+3. `didDiscoverServices` → SDK keeps only service **`FFF0`**, then `discoverCharacteristics:nil`.
+4. On **`VIETMAP-HUD`** (name does **not** contain `TPMS`): assign **`FFF2`** as the write characteristic, enable notify on **`FFF1`** (+ descriptor discovery).
+5. Immediately **`getHUDInfo`**; start **7 s** repeating timer → heartbeat CMD `0x02` when `isHeartBeat` is enabled.
+
+RE detail: [vietmap-hud-sdk-decompile.md](vietmap-hud-sdk-decompile.md) §§5–7.
 
 ### 6.3 HUDInfo handshake
 
-1. App sends **CMD `0x0E`** (new format `A5 5A 37 C3 …`).
-2. ESP returns text payload, e.g.:
+1. App calls `getHUDInfo` → **CMD `0x0E`** with **1-byte payload `0x00`**, framed as `A5 5A 37 C3 …` via `sendParamData:` (needs session UID from `startWithUID:` for checksum).
+2. Accessory replies on **`FFF1` notify** (frames reassembled on `A5 5A 37 C3`); SDK parses with `HUDInfoWithDataString:` and fires **`BTManager:didGetHUDInfo:`**.
+3. Example text payload:
 
    `MODEL:H50,HW:1.0.0,FW:1.0.2,PROTOCOL:2.2.2,OBDV:0_1.0,SID:VMS3TD000001`
 
-3. App parses `MODEL`, `HW`, `FW`, `PROTOCOL`, `OBDV`, `SID` → protocol branch (nav, JPEG arrow, etc.).
+4. App stores `DJHUDInfo` → later nav/camera/heartbeat use **`sendParamData:`** (`C3`). Before HUDInfo, heartbeat/camera may use legacy **`sendParamDataProtocol_1_6`** (`C5`).
 
 Defaults in firmware: `g_model`, `g_protocol`, … in `src/main.cpp` / NVS `vmhud` (C3 can change via serial).
 
@@ -144,9 +149,9 @@ Defaults in firmware: `g_model`, `g_protocol`, … in `src/main.cpp` / NVS `vmhu
 | CMD | Direction | Meaning (summary) |
 |-----|-----------|---------------------|
 | `0x00` / `0x40` | app → ESP | Navigation (variable / fixed layout) |
-| `0x01` | app → ESP | Camera / **speed limit** (cell 4 bytes: type, dist BE16, **limit u8 km/h**) |
-| `0x02` | app → ESP | Heartbeat (GPS speed) |
-| `0x0E` | both ways | HUDInfo |
+| `0x01` | app → ESP | Camera / **speed limit** — **4 bytes**: type, distance (16-bit BE), **limit u8 km/h** (`sendCameraInformationWithType:…`) |
+| `0x02` | app → ESP | Heartbeat (~**7 s** timer after connect; 2-byte speed when `hudInfo` set) |
+| `0x0E` | app → ESP (req), ESP → app (resp) | HUDInfo query / comma-separated identity string |
 
 Frame: magic `A5 5A 37`, `C3` (new) or `C5` (legacy), MD5-modulo or CRC16 checksum — see `lib/vmhud/hud_codec.h`.
 
