@@ -67,25 +67,39 @@ final class LiveActivityManager: ObservableObject {
     }
 
     private func contentState(from snapshot: TireSnapshot, usePSI: Bool) -> TirePressureAttributes.ContentState {
-        func text(_ index: Int) -> String {
+        func pressureText(_ index: Int) -> String {
             guard let r = snapshot.wheels[index] else { return "—" }
             if usePSI {
                 return String(format: "%.0f", r.pressurePSI())
             }
             return String(format: "%.1f", r.pressureBar)
         }
-        func fault(_ index: Int) -> Bool {
-            snapshot.wheels[index]?.fault ?? false
+
+        func tempText(_ index: Int) -> String {
+            guard let r = snapshot.wheels[index] else { return "—" }
+            return "\(r.tempC)°C"
         }
+
+        func isFault(_ index: Int) -> Bool {
+            guard let r = snapshot.wheels[index] else { return false }
+            return r.fault || r.pressureBar < 1.8 || r.pressureBar > 3.0 || r.tempC > 65
+        }
+
         return TirePressureAttributes.ContentState(
-            flPSI: text(0),
-            frPSI: text(1),
-            rlPSI: text(2),
-            rrPSI: text(3),
-            flFault: fault(0),
-            frFault: fault(1),
-            rlFault: fault(2),
-            rrFault: fault(3),
+            flPressure: pressureText(0),
+            frPressure: pressureText(1),
+            rlPressure: pressureText(2),
+            rrPressure: pressureText(3),
+            unit: usePSI ? "PSI" : "bar",
+            flTemp: tempText(0),
+            frTemp: tempText(1),
+            rlTemp: tempText(2),
+            rrTemp: tempText(3),
+            flFault: isFault(0),
+            frFault: isFault(1),
+            rlFault: isFault(2),
+            rrFault: isFault(3),
+            hasWarning: snapshot.hasAnyWarning,
             updatedAt: snapshot.lastUpdate ?? Date()
         )
     }

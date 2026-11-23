@@ -21,6 +21,7 @@ targets:
       - path: Shared
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.binhho.icar-tpms
+      ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
       GENERATE_INFOPLIST_FILE: YES
       INFOPLIST_KEY_CFBundleDisplayName: iCar TPMS
       INFOPLIST_KEY_UILaunchScreen_Generation: YES
@@ -36,6 +37,11 @@ targets:
           - bluetooth-central
         NSSupportsLiveActivities: true
         UIRequiresFullScreen: true
+        CFBundleURLTypes:
+          - CFBundleTypeRole: Editor
+            CFBundleURLName: com.binhho.icar-tpms
+            CFBundleURLSchemes:
+              - icartpms
     entitlements:
       path: IcarTPMS/IcarTPMS.entitlements
     dependencies:

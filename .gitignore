@@ -6,3 +6,4 @@ ios/IcarTPMS/*.xcworkspace
 firmware/**/.pio/
 firmware/**/.esp32-target.json
 mazda/build/
+.agents/
