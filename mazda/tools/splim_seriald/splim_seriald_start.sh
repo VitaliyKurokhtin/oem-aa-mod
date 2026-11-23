@@ -11,6 +11,7 @@
 # ESP32 native USB CDC on CMU150 (FW 74.00.324A) needs cdc-acm. Deliberately the
 # only module loaded: the firmware targets native CDC, so the USB-UART drivers
 # (ftdi_sio, pl2303) would just add kernel code that can bind unrelated devices.
+export PATH="/sbin:/usr/sbin:$PATH"
 modprobe cdc-acm 2>/dev/null
 
 # Uncomment to pin a device:

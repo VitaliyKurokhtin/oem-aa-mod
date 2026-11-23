@@ -7,7 +7,7 @@
 //
 // DIAGNOSTIC-ONLY build: the UDP wire format isn't confirmed yet, so this daemon
 // does NOTHING but bind UDP:50505 and log every datagram it receives (sender,
-// length, printable ASCII, raw hex) to /data_persist/splim_udpd.log. It does NOT
+// length, printable ASCII, raw hex) to stderr with [SPLIM-UDP] namespace. It does NOT
 // parse the payload and does NOT write /data_persist/splim — that comes later,
 // once the format is known from these logs.
 //
@@ -26,35 +26,29 @@
 #include <unistd.h>
 
 #define SPLIM_PORT   50505
-#define SPLIM_LOG    "/data_persist/splim_udpd.log"
 
 static volatile sig_atomic_t g_stop = 0;
 
 static void on_signal(int sig) { (void)sig; g_stop = 1; }
 
-// Append one line per received datagram to SPLIM_LOG so the (still unconfirmed)
-// wire format can be reverse-engineered from a real sender: sender addr, length,
-// the printable ASCII view, and a raw hex dump. Line-buffered so `tail -f` sees
-// packets live. (Writes to flash on every packet — this is a bring-up aid.)
+// Log received datagram to stderr with [SPLIM-UDP] namespace
 static void log_packet(const struct sockaddr_in *src, const unsigned char *buf, ssize_t n)
 {
-    static FILE *lf = NULL;
-    if (!lf) {
-        lf = fopen(SPLIM_LOG, "a");
-        if (!lf) return;
-        setvbuf(lf, NULL, _IOLBF, 0);
-    }
+    char ascii[128] = {0};
+    char hex[256] = {0};
+    ssize_t an = (n < (ssize_t)sizeof(ascii) - 1) ? n : (ssize_t)sizeof(ascii) - 1;
+    for (ssize_t i = 0; i < an; i++)
+        ascii[i] = (buf[i] >= 0x20 && buf[i] < 0x7f) ? (char)buf[i] : '.';
 
-    fprintf(lf, "t=%ld from=%s:%u len=%zd ascii=\"",
-            (long)time(NULL),
+    char *hp = hex;
+    ssize_t hn = (n < 32) ? n : 32;
+    for (ssize_t i = 0; i < hn; i++)
+        hp += snprintf(hp, sizeof(hex) - (hp - hex), "%02x ", buf[i]);
+
+    fprintf(stderr, "[SPLIM-UDP] from=%s:%u len=%zd ascii=\"%s\" hex=%s\n",
             src ? inet_ntoa(src->sin_addr) : "?",
             src ? (unsigned)ntohs(src->sin_port) : 0u,
-            n);
-    for (ssize_t i = 0; i < n; i++)
-        fputc((buf[i] >= 0x20 && buf[i] < 0x7f) ? buf[i] : '.', lf);
-    fprintf(lf, "\" hex=");
-    for (ssize_t i = 0; i < n; i++) fprintf(lf, "%02x ", buf[i]);
-    fputc('\n', lf);
+            n, ascii, hex);
 }
 
 int main(void)

@@ -1,11 +1,14 @@
 // VietMap Live → BLE HUD emulator → USB CDC "SPLIM <km/h>" for Mazda CMU.
-// Headless Super Mini firmware (no TFT). Codec: hud_codec.h (AGPL-3.0).
+// Supports Headless (Super Mini) and Display (LilyGO T-Display S3 or I2C OLED).
+// Codec: lib/vmhud/hud_codec.h (AGPL-3.0, shared with mzd-vietnav-hud).
+
 #include <NimBLEDevice.h>
 #include <Preferences.h>
 #include <atomic>
 #include <mutex>
 #include "mbedtls/md5.h"
 #include "hud_codec.h"
+#include "display_ui.h"
 
 static String g_name = "VIETMAP-HUD";
 static String g_model = "H50";
@@ -18,6 +21,7 @@ static String g_adv = "BOTH";
 static Preferences g_store;
 static std::mutex g_cfgMutex;
 static std::atomic<bool> g_connected{false};
+static std::atomic<bool> g_hudInfoOk{false};
 static uint16_t g_conn = BLE_HS_CONN_HANDLE_NONE;
 static NimBLECharacteristic *g_h1 = nullptr;
 static NimBLECharacteristic *g_h50 = nullptr;
@@ -27,8 +31,21 @@ static vmhud::Receiver<4096> g_rxH1, g_rxH50;
 
 static std::atomic<uint8_t> g_postedLimit{0};
 static std::atomic<uint16_t> g_currentSpeed{0};
+static std::atomic<uint16_t> g_camDist{0};
+static std::atomic<uint8_t> g_camType{0};
+static std::mutex g_roadMutex;
+static String g_currentRoad = "";
+
+static std::atomic<uint32_t> g_camPktCount{0};
+static std::atomic<uint32_t> g_navPktCount{0};
+static std::atomic<uint32_t> g_hbPktCount{0};
+static std::atomic<uint32_t> g_splimTxCount{0};
+static std::atomic<uint32_t> g_lastSplimMs{0};
+
 static uint8_t g_lastEmittedLimit = 0;
 static uint32_t g_lastKeepaliveMs = 0;
+static volatile bool g_displayDirty = true;
+static uint32_t g_lastDisplayMs = 0;
 
 // CMU read_splim() rejects entries older than 8 s — re-emit every 2 s while
 // a valid limit is held so the HUD sign does not go stale between CAM frames.
@@ -70,16 +87,24 @@ static void emitSplim(uint8_t limit) {
   }
   g_lastEmittedLimit = limit;
   g_lastKeepaliveMs = millis();
+  g_lastSplimMs = g_lastKeepaliveMs;
+  g_splimTxCount++;
+  g_displayDirty = true;
   Serial.printf("SPLIM %u\n", (unsigned)limit);
 }
 
-static uint8_t postedLimitFromCamera(const vmhud::Frame &frame) {
+static uint8_t postedLimitFromCamera(const vmhud::Frame &frame, uint16_t &outDist, uint8_t &outType) {
+  outDist = 0;
+  outType = 0;
   if (frame.command != 1 || frame.size < 4 || (frame.size % 4) != 0) {
     return 0;
   }
   uint8_t pick = 0;
   uint16_t pickDist = 0xFFFF;
+  uint8_t pickType = 0;
+
   for (size_t i = 0; i < frame.size; i += 4) {
+    const uint8_t type = frame.payload[i];
     const uint16_t dist = vmhud::be16(frame.payload + i + 1);
     const uint8_t lim = frame.payload[i + 3];
     if (lim < 5 || lim > 200) {
@@ -91,14 +116,19 @@ static uint8_t postedLimitFromCamera(const vmhud::Frame &frame) {
     if (dist < pickDist) {
       pickDist = dist;
       pick = lim;
+      pickType = type;
     }
   }
   if (pick) {
+    outDist = pickDist;
+    outType = pickType;
     return pick;
   }
   for (size_t i = 0; i < frame.size; i += 4) {
     const uint8_t lim = frame.payload[i + 3];
     if (lim >= 5 && lim <= 200) {
+      outDist = vmhud::be16(frame.payload + i + 1);
+      outType = frame.payload[i];
       return lim;
     }
   }
@@ -132,6 +162,8 @@ static void notifyInfo(const vmhud::Frame &request, NimBLECharacteristic *route)
       return;
     }
   }
+  g_hudInfoOk = true;
+  g_displayDirty = true;
   Serial.printf("[HUD] HUDInfo %u bytes\n", (unsigned)count);
 }
 
@@ -149,28 +181,43 @@ static void onFrame(const vmhud::Frame &frame, void *user) {
     if (!vmhud::navigation(frame, nav)) {
       return;
     }
+    g_navPktCount++;
     g_currentSpeed = nav.speed;
     const String current = textUtf8(nav.current, nav.currentSize);
+    {
+      std::lock_guard<std::mutex> guard(g_roadMutex);
+      g_currentRoad = current;
+    }
+    g_displayDirty = true;
     Serial.printf("[NAV] speed=%u cur=\"%s\"\n", (unsigned)nav.speed, current.c_str());
     return;
   }
 
-  if (frame.command == 1 && (frame.size == 4 || frame.size == 8)) {
+  // Camera and speed limit (CMD 0x01, multiple of 4 bytes)
+  if (frame.command == 1 && frame.size >= 4 && (frame.size % 4) == 0) {
+    g_camPktCount++;
     for (size_t i = 0; i < frame.size; i += 4) {
       Serial.printf("[CAM] type=%u dist=%u limit=%u\n", frame.payload[i],
                     (unsigned)vmhud::be16(frame.payload + i + 1), frame.payload[i + 3]);
     }
-    const uint8_t lim = postedLimitFromCamera(frame);
+    uint16_t dist = 0;
+    uint8_t type = 0;
+    const uint8_t lim = postedLimitFromCamera(frame, dist, type);
+    g_camDist = dist;
+    g_camType = type;
+    g_postedLimit = lim;
+    g_displayDirty = true;
     if (lim) {
-      g_postedLimit = lim;
       emitSplim(lim);
     }
     return;
   }
 
   if (frame.command == 2 && (frame.size == 1 || frame.size == 2)) {
+    g_hbPktCount++;
     const uint16_t spd = frame.size == 1 ? frame.payload[0] : vmhud::be16(frame.payload);
     g_currentSpeed = spd;
+    g_displayDirty = true;
     Serial.printf("[HB] speed=%u\n", (unsigned)spd);
   }
 }
@@ -185,9 +232,11 @@ struct ServerCB : NimBLEServerCallbacks {
     }
     g_conn = conn.getConnHandle();
     g_connected = true;
+    g_hudInfoOk = false;
     g_subH1 = g_subH50 = false;
     g_rxH1.reset();
     g_rxH50.reset();
+    g_displayDirty = true;
     Serial.println("[BLE] connected");
   }
   void onDisconnect(NimBLEServer *, NimBLEConnInfo &conn, int reason) override {
@@ -195,12 +244,16 @@ struct ServerCB : NimBLEServerCallbacks {
       return;
     }
     g_connected = false;
+    g_hudInfoOk = false;
     g_conn = BLE_HS_CONN_HANDLE_NONE;
     g_subH1 = g_subH50 = false;
     g_rxH1.reset();
     g_rxH50.reset();
     g_postedLimit = 0;
+    g_camDist = 0;
+    g_camType = 0;
     g_lastEmittedLimit = 0;
+    g_displayDirty = true;
     Serial.printf("[BLE] disconnected reason=%d\n", reason);
     startConnectable();
   }
@@ -216,6 +269,7 @@ struct SubscribeCB : NimBLECharacteristicCallbacks {
     } else {
       g_subH50 = (sub & 1) != 0;
     }
+    g_displayDirty = true;
     Serial.printf("[BLE] notify sub=0x%04X\n", sub);
   }
 };
@@ -274,6 +328,8 @@ void setup() {
   delay(400);
   Serial.println("\n[BOOT] vmhud-esp32-s3 — VietMap BLE HUD → USB SPLIM");
 
+  displayInit();
+
   if (g_store.begin("vmhud", false)) {
     g_name = g_store.getString("name", g_name);
     g_model = g_store.getString("model", g_model);
@@ -307,12 +363,45 @@ void setup() {
 }
 
 void loop() {
+  const uint32_t now = millis();
   const uint8_t lim = g_postedLimit.load();
+
+  // SPLIM USB serial keepalive emission to CMU
   if (lim >= 5 && lim <= 200) {
-    const uint32_t now = millis();
     if (lim != g_lastEmittedLimit || (now - g_lastKeepaliveMs) >= kKeepaliveMs) {
       emitSplim(lim);
     }
   }
+
+  // Display update (refresh every 500ms or when state changes)
+#if VMHUD_HAS_DISPLAY
+  if (g_displayDirty || (now - g_lastDisplayMs >= 500)) {
+    g_displayDirty = false;
+    g_lastDisplayMs = now;
+
+    DisplayState st;
+    st.bleConnected = g_connected.load();
+    st.hudInfoOk = g_hudInfoOk.load();
+    st.notifySubscribed = g_subH1 || g_subH50;
+    st.postedLimit = lim;
+    st.camDist = g_camDist.load();
+    st.camType = g_camType.load();
+    st.currentSpeed = g_currentSpeed.load();
+    {
+      std::lock_guard<std::mutex> guard(g_roadMutex);
+      st.currentRoad = g_currentRoad;
+    }
+    st.lastEmittedLimit = g_lastEmittedLimit;
+    st.splimTxCount = g_splimTxCount.load();
+    st.lastSplimMs = g_lastSplimMs.load();
+    st.camPktCount = g_camPktCount.load();
+    st.navPktCount = g_navPktCount.load();
+    st.hbPktCount = g_hbPktCount.load();
+    st.uptimeSec = now / 1000;
+
+    displayUpdate(st);
+  }
+#endif
+
   delay(50);
 }

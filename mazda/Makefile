@@ -35,13 +35,10 @@ PATCHES := blmjciaapa svcjcinavi aap_service blmjcicarplay svcjcimmui
 # gen_patch_rules below). Leave a patch out of this list to build it with just
 # the common flags.
 #
-# blmjcicarplay has no per-patch defines: all of its former build-time feature
-# and diagnostic switches (CARPLAY_NO_SPLIM, CARPLAY_VN_NORMALIZE,
-# CARPLAY_NAV_DIAG, CARPLAY_MSGTYPE_DIAG, DEBUG) are now RUNTIME keys in
-# libpatch-carplay.conf (carplay_speed_limit, carplay_vn_normalize,
-# carplay_udpd_launch, carplay_nav_diag, carplay_msgtype_diag, carplay_hud_debug)
-# — one binary, configured on-device. NOTE the *_diag dumps write location data;
-# they default off and are documented with that warning in the conf file.
+# blmjcicarplay has no per-patch defines: former build-time feature switches
+# are now RUNTIME keys in libpatch-carplay.conf (carplay_speed_limit, carplay_vn_normalize,
+# carplay_udpd_launch, carplay_seriald_launch, carplay_hud_debug) — one binary, configured on-device.
+# Diagnostic dumps ([CP-NAV], [CP-MSG]) are active in debug builds (-DDEBUG) to the system log.
 
 # pkg-config wrapper pointed at the device's sysroot so it resolves
 # against the cross-compiled .pc files (not the host's). Same pattern

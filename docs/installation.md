@@ -1,238 +1,47 @@
 # Installation
 
-This covers installing a prebuilt release and the on-device setup. To
-build from source instead, see [build.md](build.md). For
-a project overview, see the [main README](../README.md).
+This guide covers installing the mod on your Mazda Connect CMU. To build from source instead, see [build.md](build.md). For a project overview, see the [main README](../README.md).
 
-## Install from a release
+---
 
-If you just want to run the mod, grab a prebuilt binary from this
-repository's Releases page. Each release has two archives:
-`oem-aa-mod-<version>.zip` and `oem-aa-mod-<version>-debug.zip`.
-Use `oem-aa-mod-<version>.zip`; only grab the `-debug` one if you're
-actually debugging.
+## 1. Automated USB Install (Recommended)
 
-The archive has the same layout — the shims under their canonical names
-plus the patched system-attribute XMLs and the sample config — so it's
-everything the on-device install needs:
+You do **not** need a laptop, SSH, or serial jailbreak connection in the car. The USB installer automates all binary staging, WCP-safe service patching, system attribute updates, and watchdog protection through a clean interactive dialog on the car's center display (`jci-dialog`).
 
-```
-oem-aa-mod-<version>/
-  libpatch-blmjciaapa.so              # -> /data_persist/oem-aa-mod/
-  libpatch-svcjcinavi.so              # -> /data_persist/oem-aa-mod/ (optional; HUD merge)
-  libpatch-aap_service.so             # -> /data_persist/oem-aa-mod/ (optional; protocol v1.6)
-  libpatch-blmjcicarplay.so           # -> /data_persist/oem-aa-mod/ (optional; CarPlay HUD nav)
-  libpatch-svcjcimmui.so              # -> /data_persist/oem-aa-mod/ (optional; Audio Off fallback)
-  resources/
-    aap_system_attributes.xml         # -> /etc/
-    aap_system_attributes_UCP.xml     # -> /etc/
-    libpatch.conf                     # -> /data_persist/oem-aa-mod/ (optional; Android Auto runtime config)
-    libpatch-carplay.conf             # -> /data_persist/oem-aa-mod/ (optional; CarPlay runtime config)
-```
+### Creating the Installation USB
 
-These shims are per-service `LD_PRELOAD` libraries, each scoped to the
-single `sm_svclauncher` PID hosting its target service. Installing is
-two on-device steps: drop the binaries somewhere `sm` can read them at
-boot, then tell `sm.conf` to preload each one for its service
-(`jciAAPA` for the Android Auto shim, and optionally `jcinavi` for the
-HUD-merge shim).
+1. Prepare any USB flash drive ($\ge$ 1GB).
+2. Run the automated maker script from the repository:
+   - **macOS / Linux:**
+     ```bash
+     ./mazda/installer/make_usb.sh
+     ```
+   - **Windows:**
+     Right-click `mazda/installer/make_usb.bat` and select **Run as administrator**.
+3. The script will format the USB to FAT32 (MBR, label `MZD`), copy all required binaries and triggers cleanly, and generate the CVE-2024-8359 autorun payloads.
 
-> All commands below assume a root shell on the CMU (telnet/SSH after
-> the usual jailbreak; the standard JCI dev shell works).
+For full details on how the USB installer works under the hood, see the [USB Installer Guide](usb-installer-guide.md).
 
-### 1. Place the binaries in `/data_persist/`
+### Installing on the Car
 
-`/data_persist/` survives firmware updates and factory resets, which
-keeps the mod from getting wiped by routine OEM activity. Use a
-dedicated subdirectory so the mod's files are easy to find and remove:
+1. Power on the car (ACC or ON). Wait for the Mazda Connect system to fully boot to the home screen.
+2. Remove any navigation SD cards or other USB drives.
+3. Plug the prepared USB into **USB Port 1** (the smartphone port).
+4. **On-screen dialog:**
+   - Within 15–20 seconds, a native popup dialog will appear on screen asking:
+     - **Main Action:** Choose **[Install Mod]** to manage the HUD mod, or **[Enable SSH]** to start the SSH daemon for wireless root access.
+     - **If Install Mod:**
+       - Select integrations: *"Which integrations would you like to manage?"* $\rightarrow$ Choose **Both** (or Android Auto / CarPlay individually).
+       - Select action: *"What would you like to do?"* $\rightarrow$ Select **Install** (or **Uninstall** to cleanly revert to stock).
+   - The installer displays live progress on screen and automatically reboots the CMU upon completion (SSH action does not reboot).
+   - *(Fallback)*: If the dialog does not pop up automatically, go to **Entertainment $\rightarrow$ USB**, play any MP3 track, and tap the **HUD+** or **SSH** button on screen.
+5. All execution details and system snapshots are saved to `logs/` on the USB drive for debugging.
 
-```sh
-mkdir -p /data_persist/oem-aa-mod
-cp /mnt/sdb1/libpatch-blmjciaapa.so /data_persist/oem-aa-mod/
-# Optional: the HUD-merge shim (only useful with the nav SD card; see
-# hud_transport=svcnavi under Configuration below).
-cp /mnt/sdb1/libpatch-svcjcinavi.so /data_persist/oem-aa-mod/
-# Optional: the protocol v1.6 shim (only needed for use_protocol_v1_6=true;
-# enables lane guidance on the HUD; see Configuration below). Inert unless
-# that key is set.
-cp /mnt/sdb1/libpatch-aap_service.so /data_persist/oem-aa-mod/
-# Optional: runtime config (see Configuration below). Omit either to use
-# the built-in defaults. libpatch.conf configures the Android Auto
-# libraries; libpatch-carplay.conf configures the CarPlay bridge.
-cp /mnt/sdb1/libpatch.conf /data_persist/oem-aa-mod/
-cp /mnt/sdb1/libpatch-carplay.conf /data_persist/oem-aa-mod/
-chmod 0644 /data_persist/oem-aa-mod/libpatch-*.so
-sync
-```
+---
 
-`sync` is important — `/data_persist/` is backed by flash with deferred
-writes, and without an explicit flush a power cycle before the next
-write-back can leave the file truncated or missing.
+## 2. Configuration
 
-The `libpatch-svcjcinavi.so` and `libpatch.conf` lines are optional:
-copy `libpatch-svcjcinavi.so` only if you want the HUD-merge shim (it
-self-disables in any process that isn't the nav service), and
-`libpatch.conf` only if you want to override defaults. The two libraries
-load into different services — `libpatch-blmjciaapa.so` is preloaded for
-`jciAAPA` and `libpatch-svcjcinavi.so` for `jcinavi`, each via its own
-`<service>` block in `sm.conf` (step 2 below).
-
-> **EU firmware:** the OEM nav service blanks the HUD street line in this
-> market, so the street name will be missing even with everything else
-> working. To show it, deploy `libpatch.conf` and set
-> **`force_street_name = true`** — see
-> [Configuration](#configuration) for details. NA units
-> show the street with the defaults and need no change.
-
-SD cards mount under `/mnt/sd<x><n>` (e.g. `/mnt/sda1`, `/mnt/sdb1`, …)
-depending on which USB/SD slot the kernel enumerates first on your
-unit. Check `mount | grep /mnt/sd` if unsure.
-
-### 2. Inject `LD_PRELOAD` via `sm.conf`
-
-`sm` builds each spawned process's environment from `<environ_var>`
-elements inside the matching `<service>` block, then `posix_spawn`s the
-binary with that envp. That envp is given to the per-service
-`sm_svclauncher` *before* it `dlopen`s the OEM `.so`, so `LD_PRELOAD` is
-honoured at the right moment and the shim ends up mapped into exactly
-one PID.
-
-Edit `/jci/sm/sm.conf` and add an `<environ_var>` to each service you
-want to patch.
-
-**`jciAAPA`** (required — Android Auto shim). Find the
-`<service … name="jciAAPA" …>` block and add the env var inside it:
-
-```xml
-<service type="jci_service" name="jciAAPA"
-         path="/jci/aapa/blmjciaapa.so" …>
-    <!-- existing <dependency>/<param>/… entries left in place -->
-    <environ_var env_name="LD_PRELOAD"
-                 env_value="/data_persist/oem-aa-mod/libpatch-blmjciaapa.so"/>
-</service>
-```
-
-**`jcinavi`** (optional — HUD-merge shim; only needed with
-`hud_transport = svcnavi` and the navigation SD card). Find the
-`<service … name="jcinavi" …>` block and add the same env var inside it:
-
-```xml
-<service type="jci_service" name="jcinavi" path="/jci/navi/svcjcinavi.so" …>
-    <!-- existing <dependency>/<param>/… entries left in place -->
-    <environ_var env_name="LD_PRELOAD"
-                 env_value="/data_persist/oem-aa-mod/libpatch-svcjcinavi.so"/>
-</service>
-```
-
-**`aap_service`** (only needed for Android Auto GAL 1.6 — i.e.
-`use_protocol_v1_6 = true`). Find the `<service … name="aap_service" …>` block
-and add the same env var inside it:
-
-```xml
-<service type="process" name="aap_service" path="/usr/bin/aap_service" …>
-    <!-- existing entries left in place -->
-    <environ_var env_name="LD_PRELOAD"
-                 env_value="/data_persist/oem-aa-mod/libpatch-aap_service.so"/>
-</service>
-```
-
-For 1.6 HUD guidance BOTH `jciAAPA` (blmjciaapa) and `aap_service` must be
-preloaded: the aap_service shim advertises 1.6 and forwards the decoded
-navigation to the blmjciaapa shim, which renders it on the HUD. With
-`use_protocol_v1_6 = false` (the default) the aap_service shim is inert, so there
-is no reason to preload it unless you are enabling 1.6.
-
-(Leave the existing `<dependency>`/`<connection>`/attributes exactly as
-they are — only the `<environ_var>` line is added.) Skip this block
-entirely if you aren't using the svcnavi HUD transport; the shim
-self-disables in any process that isn't the nav service, but there's no
-reason to preload it where it does nothing.
-
-### 3. Update the AAP system attribute XMLs in `/etc`
-
-`blmjciaapa.so` reads its one-time configuration from
-`/etc/aap_system_attributes.xml` and `/etc/aap_system_attributes_UCP.xml`
-at startup. The patched copies live in [resources/](../resources/) — back
-up the originals and overwrite:
-
-```sh
-cp /etc/aap_system_attributes.xml          /etc/aap_system_attributes.xml.orig
-cp /etc/aap_system_attributes_UCP.xml      /etc/aap_system_attributes_UCP.xml.orig
-cp /mnt/sdb1/aap_system_attributes.xml     /etc/aap_system_attributes.xml
-cp /mnt/sdb1/aap_system_attributes_UCP.xml /etc/aap_system_attributes_UCP.xml
-sync
-```
-
-(Adjust the source path to wherever you staged the files from
-[resources/](../resources/) — SD card mount, `scp`, etc.)
-
-### 3b. CarPlay HUD navigation (optional)
-
-`libpatch-blmjcicarplay.so` forwards Apple CarPlay turn-by-turn to the
-same navigation HUD. It is independent of the Android Auto shims — skip
-this if you don't use CarPlay. Two on-device changes:
-
-**Preload it for `jciCARPLAY`.** Find the `<service … name="jciCARPLAY" …>`
-block in `sm.conf` and add both env vars inside it:
-
-```xml
-<service type="jci_service" name="jciCARPLAY" path="…/blmjcicarplay.so" …>
-    <!-- existing entries left in place -->
-    <environ_var env_name="LD_PRELOAD"
-                 env_value="/data_persist/oem-aa-mod/libpatch-blmjcicarplay.so"/>
-    <environ_var env_name="LD_LIBRARY_PATH" env_value="/jci/lib:/usr/lib"/>
-</service>
-```
-
-> **Wireless CarPlay (WCP) units:** if `/jci/sm/sm_WCP.conf` exists, the
-> service manager *merges* the `jciCARPLAY` stanza from `sm.conf` **and**
-> `sm_WCP.conf`. Add the `<environ_var>` to **exactly one** of them
-> (patch `sm_WCP.conf` if present, otherwise `sm.conf`) — putting it in
-> both yields a duplicate `LD_PRELOAD` that crash-loops the service. It's
-> also wise to set `reset_board="no"` on the `jciCARPLAY` service so a
-> shim fault restarts only CarPlay instead of rebooting the unit.
-
-**`jciMMUI`** (optional — Audio Off fallback when CP/AA disconnect would
-otherwise land on FM). Needs `fallback_audio_off = true` in
-`libpatch.conf` (default off in code; on in the shipped sample conf):
-
-```xml
-<service type="jci_service" name="jciMMUI" path="/jci/mmui/svcjcimmui.so" …>
-    <environ_var env_name="LD_PRELOAD"
-                 env_value="/data_persist/oem-aa-mod/libpatch-svcjcimmui.so"/>
-</service>
-```
-
-**Enable nav advertisement** so CarPlay offers guidance to the HUD — set
-`NaviSupported` to `TRUE` in `/etc/devmgr_config_master.xml` (back it up
-first):
-
-```sh
-cp /etc/devmgr_config_master.xml /etc/devmgr_config_master.xml.orig
-sed -i 's#<name>NaviSupported</name><value>FALSE</value>#<name>NaviSupported</name><value>TRUE</value>#' /etc/devmgr_config_master.xml
-sync
-```
-
-> The [oem-aa-mod-installer](https://github.com/Bijan-A/oem-aa-mod-installer)
-> automates all of the above (Android Auto **and** CarPlay, WCP-safe) in a
-> single USB run — this manual path is for reference or fine-grained control.
-
-### 4. Restart the services (or reboot)
-
-Restart just the services you changed:
-
-```sh
-smctl -r -n jciAAPA
-smctl -r -n jcinavi    # only if you patched jcinavi in step 2
-```
-
-…or reboot the unit.
-
-## Configuration
-
-Runtime behaviour is controlled by two optional files placed in the same
-folder as the libraries (`/data_persist/oem-aa-mod/` — step 1 copies them
-there):
+Runtime behaviour is controlled by two optional configuration files placed in `/data_persist/oem-aa-mod/` (automatically staged by the USB installer):
 
 - **`libpatch.conf`** — the Android Auto libraries (`blmjciaapa`,
   `svcjcinavi`, `aap_service`). Sample:
@@ -264,8 +73,6 @@ case-insensitive.
 | `carplay_speed_limit` | `true` / `false` | `false` | Show the posted speed limit on the HUD. Requires the shared speed-limit feed; off = navigation-only (see the note below). |
 | `carplay_udpd_launch` | `true` / `false` | `true` | Auto-launch the shared `splim_udpd` listener. Only acts when `carplay_speed_limit = true`; set `false` if the Android Auto mod already runs it, or when using ESP32 `splim_seriald` (see the note below). |
 | `carplay_seriald_launch` | `true` / `false` | `false` | Auto-launch `splim_seriald` (ESP32 USB CDC → `/data_persist/splim`). Only acts when `carplay_speed_limit = true`; keep a single writer (see the note below). |
-| `carplay_nav_diag` | `true` / `false` | `false` | **Developer/RE aid** — dump decoded nav payloads to `/data_persist/nav_diag.log`. Writes location data; leave off (see the note below). |
-| `carplay_msgtype_diag` | `true` / `false` | `false` | **Developer/RE aid** — dump devmgr message types to `/data_persist/msgtype_diag.log`. Writes location data; leave off (see the note below). |
 | `carplay_hud_debug` | `true` / `false` | `false` | **Developer aid** — overlay raw turn codes on the HUD street strip when no glyph maps (see the note below). |
 
 Booleans are lenient — `true`/`1`/`yes`/`on` and `false`/`0`/`no`/`off`
@@ -360,15 +167,14 @@ The `carplay_*` keys live in **`libpatch-carplay.conf`** and are read by the
   `carplay_udpd_launch = false`. Firmware:
   [`firmware/vmhud-esp32-s3`](../firmware/vmhud-esp32-s3/README.md).
 
-- **`carplay_nav_diag`** / **`carplay_msgtype_diag`** are reverse-engineering aids
-  that append raw navigation payloads / message metadata to
-  `/data_persist/nav_diag.log` and `/data_persist/msgtype_diag.log`. **Privacy:
-  those payloads are your location/route data**, and they cause flash writes, so
-  both default `false` — switch one on only for a bench session, then turn it back
-  off and delete the log. **`carplay_hud_debug`** overlays the raw turn codes
+- **Diagnostic logging**: In debug builds (`-DDEBUG`), diagnostic outputs are
+  automatically emitted to the system log (`stderr` / `/tmp/carplay_bridge.log`) with
+  clear namespaces (`[CP-NAV]`, `[CP-MSG]`, `[SPLIM-SERIAL]`, `[SPLIM-UDP]`) for easy querying,
+  without creating separate files on flash memory.
+- **`carplay_hud_debug`** overlays the raw turn codes
   (`EV/S/A`) on the HUD street strip whenever the icon lookup finds no glyph — a
   developer aid for extending the icon table; it corrupts the normal street display
-  while on, so it also defaults `false`.
+  while on, so it defaults `false`.
 
 After editing either file, restart the affected service(s) — `jciAAPA`,
 `jcinavi` if you patched it, `aap_service` if you enabled `use_protocol_v1_6`
@@ -376,15 +182,14 @@ After editing either file, restart the affected service(s) — `jciAAPA`,
 (`libpatch-carplay.conf`) — or reboot for the change to take effect. Each file
 is read once at library load.
 
-## Uninstall / disable
+## 3. Uninstall / Revert to Stock
 
-Remove (or comment out) the `<environ_var>` line(s) you added in
-`/jci/sm/sm.conf` (the `jciAAPA` one, the `jcinavi` one if present, the
-`aap_service` one if you enabled 1.6, and the `jciCARPLAY` one plus its
-`LD_LIBRARY_PATH` if you installed the CarPlay shim — remember WCP units
-may have these in `sm_WCP.conf`), restore the original
-`/etc/aap_system_attributes*.xml` and `/etc/devmgr_config_master.xml`
-files from the `.orig` backups, then restart the affected services
-(`smctl -r -n jciAAPA` / `smctl -r -n jcinavi` / `smctl -r -n aap_service`
-/ `smctl -r -n jciCARPLAY`) or reboot. The `/data_persist/oem-aa-mod/`
-directory can be deleted afterwards.
+### Via USB Installer (Recommended)
+Insert the installation USB drive into the vehicle. When the on-screen prompt appears, select **Uninstall**. The installer will automatically:
+- Remove injected `LD_PRELOAD` lines from `/jci/sm/sm.conf` and `sm_WCP.conf`.
+- Restore the original `/etc/aap_system_attributes*.xml` and `/etc/devmgr_config_master.xml` from pristine `.orig` backups.
+- Remove all shim libraries from `/data_persist/oem-aa-mod/`.
+- Cleanly reboot the unit.
+
+### Manual Uninstall (Over SSH / Dev Shell)
+If uninstalling manually over an SSH session, remove the injected `<environ_var>` lines from `/jci/sm/sm.conf` (and `sm_WCP.conf`), restore the original XML backups, and delete `/data_persist/oem-aa-mod/`.

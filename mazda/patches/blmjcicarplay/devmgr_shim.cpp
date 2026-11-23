@@ -225,57 +225,53 @@ void arm_navi(const char *from, void *procH, void *devH)
 typedef long (*pfn_msgrcv)(int, void *, unsigned, long, int);
 pfn_msgrcv      g_real_msgrcv = nullptr;
 
-// [DIAGNOSTIC] carplay_nav_diag (libpatch-carplay.conf) turns on a full-payload dump of every
-// maneuver(0x8059)+guidance(0x8058) to /data_persist/nav_diag.log — used to RE the distance /
-// turn-type / road-name field offsets on a real drive. PRIVACY: the nav payload is LOCATION
-// DATA, so this defaults OFF and should only be switched on for a bench RE session, then off
-// again. Unlike the old build-time -DCARPLAY_NAV_DIAG, the dump code + its file path are now
-// always present in the .so (a `strings` audit will show nav_diag.log); the gate is the runtime
-// key, not the binary's contents.
-//
-// [NAV-END RE] carplay_msgtype_diag logs EVERY received message's (time,type,size) + a payload
-// peek for the small (<0x300) messages the HUD path skips — used to find the iAP2 "navigation
-// stopped" signal (AA gets it decoded as a Status event; the CarPlay raw tap filters it out by
-// size). Superseded by the OEM com.jci.carplay TBT-status subscribe below, so normally OFF; same
-// LOCATION-DATA privacy note as carplay_nav_diag. Default off.
-
+// [DIAGNOSTIC] In debug builds (DEBUG / !NDEBUG), message types and raw nav
+// payloads are automatically logged to the system log (stderr / g_logf) with
+// namespaces [CP-MSG] and [CP-NAV] for easy filtering, avoiding flash wear.
 void msg_tap(int msqid, const void *msgp, long n)
 {
     (void)msqid;
-    if (libpatch_config::carplay_msgtype_diag() && msgp && n >= 4) {
-        static FILE *tf = nullptr;
-        if (!tf) { tf = fopen("/data_persist/msgtype_diag.log", "a"); if (tf) setvbuf(tf, nullptr, _IOLBF, 0); }
-        if (tf) {
-            uint32_t mt = (*(const uint32_t *)msgp) & 0xffff;
-            fprintf(tf, "t=%ld mt=0x%04x n=0x%lx", (long)time(nullptr), (unsigned)mt, n);
-            if (mt != 0x8058 && mt != 0x8059) {          // peek the unknown / small messages
-                const unsigned char *b = (const unsigned char *)msgp;
-                long dn = (n < 40) ? n : 40;
-                for (long i = 0; i < dn; i++) fprintf(tf, " %02x", b[i]);
+
+#ifndef NDEBUG
+    // In DEBUG mode: log every received message's (type, size) + a payload peek for small messages
+    if (msgp && n >= 4) {
+        uint32_t mt = (*(const uint32_t *)msgp) & 0xffff;
+        char peek[128] = "";
+        if (mt != 0x8058 && mt != 0x8059) {          // peek the unknown / small messages
+            const unsigned char *b = (const unsigned char *)msgp;
+            long dn = (n < 20) ? n : 20;
+            char *p = peek;
+            for (long i = 0; i < dn; i++) {
+                p += snprintf(p, sizeof(peek) - (p - peek), " %02x", b[i]);
             }
-            fprintf(tf, "\n");
         }
+        LOGD("[CP-MSG] mt=0x%04x n=0x%lx%s", (unsigned)mt, n, peek);
     }
+#endif
+
     // Only big messages: maneuver=0x348, guidance=0x640. Skips chatty small msgs.
     if (n < 0x300 || !msgp) return;
-    // Decode maneuver -> HUD (passive read of the received buffer). The shipped
-    // build does NO disk logging here: the BUILD-2b probe that appended every nav
-    // payload to /data_persist/nav_msgrcv.log + nav_probe_MANEUVER_SEEN.txt was
-    // removed (the user's maneuver text is location data; also avoids flash wear).
+
+    // Decode maneuver -> HUD (passive read of the received buffer).
     nav_on_devmgr_msg(msgp, n);
-    if (libpatch_config::carplay_nav_diag()) {
-        long mt = (*(const long *)msgp) & 0xffff;
-        if (mt == 0x8059 || mt == 0x8058) {
-            static FILE *df = nullptr;
-            if (!df) { df = fopen("/data_persist/nav_diag.log", "a"); if (df) setvbuf(df, nullptr, _IOLBF, 0); }
-            if (df) {
-                const unsigned char *b = (const unsigned char *)msgp;
-                fprintf(df, "msgrcv n=0x%lx mtype=%ld :", n, *(const long *)msgp);
-                for (long i = 0; i < n; i++) fprintf(df, " %02x", b[i]);
-                fprintf(df, "\n");
+
+#ifndef NDEBUG
+    // In DEBUG mode: dump raw nav payload to system log
+    long mt = (*(const long *)msgp) & 0xffff;
+    if (mt == 0x8059 || mt == 0x8058) {
+        LOGD("[CP-NAV] msgrcv n=0x%lx mtype=0x%lx", n, mt);
+        const unsigned char *b = (const unsigned char *)msgp;
+        char hex[100];
+        for (long i = 0; i < n; i += 16) {
+            long chunk = (n - i < 16) ? (n - i) : 16;
+            char *p = hex;
+            for (long j = 0; j < chunk; j++) {
+                p += snprintf(p, sizeof(hex) - (p - hex), " %02x", b[i + j]);
             }
+            LOGD("[CP-NAV] +%04lx:%s", i, hex);
         }
     }
+#endif
 }
 
 } // namespace

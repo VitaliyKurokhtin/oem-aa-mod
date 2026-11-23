@@ -42,8 +42,8 @@ Building the shims and adding new patch targets is covered in
 
 ## Install
 
-Installing a prebuilt release and the on-device setup are covered in
-[docs/installation.md](docs/installation.md).
+Installation is completely automated via a standalone USB drive (no laptop or SSH required in the vehicle).
+See the [Installation Guide](docs/installation.md) and [USB Installer Guide](docs/usb-installer-guide.md).
 
 ## Toolchain notes
 

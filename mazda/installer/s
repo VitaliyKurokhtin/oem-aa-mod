@@ -1,0 +1,8 @@
+#!/bin/sh
+# Start SSH daemon for the current session only (no persistence on reboot)
+/usr/sbin/sshd 2>/dev/null
+echo "root:mazda" | chpasswd 2>/dev/null
+echo "cmu:jci" | chpasswd 2>/dev/null
+
+/jci/tools/jci-dialog --info --title="SSH Enabled" --text="SSH started for current session!\nConnect to CMU AP: 192.168.53.1\nuser: root / pass: mazda\n(Turns off on reboot)" --no-cancel &
+sleep 10; killall -q jci-dialog

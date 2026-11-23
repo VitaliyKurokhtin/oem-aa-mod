@@ -32,6 +32,7 @@
 #define LOCK_PATH      "/data_persist/splim_seriald.lock"
 #define DEFAULT_BAUD   B115200
 #define SPLIM_LINE_MAX 128   // not LINE_MAX: that name collides with <limits.h>
+#define LOG_TAG        "[SPLIM-SERIAL] "
 // The HUD treats splim as stale after 8 s and the ESP32 re-sends every 2 s, so an
 // unchanged limit only needs a fresh timestamp this often. Cuts flash writes.
 #define REFRESH_SEC    3
@@ -45,11 +46,11 @@ static int acquire_lock(void)
 {
     g_lock_fd = open(LOCK_PATH, O_RDWR | O_CREAT, 0644);
     if (g_lock_fd < 0) {
-        fprintf(stderr, "splim_seriald: open lock: %s\n", strerror(errno));
+        fprintf(stderr, LOG_TAG "open lock: %s\n", strerror(errno));
         return -1;
     }
     if (flock(g_lock_fd, LOCK_EX | LOCK_NB) != 0) {
-        fprintf(stderr, "splim_seriald: already running (lock busy)\n");
+        fprintf(stderr, LOG_TAG "already running (lock busy)\n");
         close(g_lock_fd);
         g_lock_fd = -1;
         return -1;
@@ -73,7 +74,7 @@ static int write_splim(int limit)
 
     FILE *f = fopen(SPLIM_TMP, "w");
     if (!f) {
-        fprintf(stderr, "splim_seriald: open tmp: %s\n", strerror(errno));
+        fprintf(stderr, LOG_TAG "open tmp: %s\n", strerror(errno));
         return -1;
     }
     // No fsync: the value is refreshed every few seconds and rename() keeps the
@@ -82,12 +83,12 @@ static int write_splim(int limit)
     if (fclose(f) != 0)
         ok = 0;
     if (!ok) {
-        fprintf(stderr, "splim_seriald: write tmp: %s\n", strerror(errno));
+        fprintf(stderr, LOG_TAG "write tmp: %s\n", strerror(errno));
         unlink(SPLIM_TMP);
         return -1;
     }
     if (rename(SPLIM_TMP, SPLIM_PATH) != 0) {
-        fprintf(stderr, "splim_seriald: rename: %s\n", strerror(errno));
+        fprintf(stderr, LOG_TAG "rename: %s\n", strerror(errno));
         unlink(SPLIM_TMP);
         return -1;
     }
@@ -202,7 +203,7 @@ static void feed_byte(char *buf, size_t *len, unsigned char c, int *last_limit)
                 if (write_splim(limit) == 0) {
                     last_write = now;
                     if (limit != *last_limit) {
-                        fprintf(stderr, "splim_seriald: splim=%d\n", limit);
+                        fprintf(stderr, LOG_TAG "splim=%d km/h\n", limit);
                         *last_limit = limit;
                     }
                 }
@@ -244,7 +245,7 @@ int main(int argc, char **argv)
     char line[SPLIM_LINE_MAX];
     size_t llen = 0;
 
-    fprintf(stderr, "splim_seriald: starting (want=%s)\n",
+    fprintf(stderr, LOG_TAG "starting (want=%s)\n",
             want ? want : "auto ttyACM*/ttyUSB*");
 
     while (!g_stop) {
@@ -259,7 +260,7 @@ int main(int argc, char **argv)
                 sleep(2);
                 continue;
             }
-            fprintf(stderr, "splim_seriald: opened %s\n", path);
+            fprintf(stderr, LOG_TAG "opened %s\n", path);
             llen = 0;
         }
 
@@ -272,7 +273,7 @@ int main(int argc, char **argv)
         if (pr < 0) {
             if (errno == EINTR)
                 continue;
-            fprintf(stderr, "splim_seriald: poll: %s — reopening\n", strerror(errno));
+            fprintf(stderr, LOG_TAG "poll: %s — reopening\n", strerror(errno));
             close(fd);
             fd = -1;
             sleep(1);
@@ -288,7 +289,7 @@ int main(int argc, char **argv)
         // n == 0 after poll() said readable is EOF (hangup); POLLHUP/ERR/NVAL with no
         // data pending is the same thing. Either way the port is gone — reopen.
         if (n <= 0 || (pfd.revents & (POLLERR | POLLNVAL))) {
-            fprintf(stderr, "splim_seriald: port lost (%s) — reopening\n",
+            fprintf(stderr, LOG_TAG "port lost (%s) — reopening\n",
                     n < 0 ? strerror(errno) : "hangup");
             close(fd);
             fd = -1;

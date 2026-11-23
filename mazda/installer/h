@@ -1,0 +1,14 @@
+#!/bin/sh
+# Dispatcher called by MP3-XSS buttons (CGI) or direct trigger.
+# Usage: sh /tmp/mnt/sdX1/h [mode] [token]
+# mode: both | aa | carplay
+D=$(cd "$(dirname "$0")" && pwd)
+M=${1:-both}; T=${2:-}
+
+for p in "$D/run.sh" "$D/installer/run.sh" "$(echo "$D" | sed 's|/tmp/mnt|/mnt|')/run.sh" "$(echo "$D" | sed 's|/mnt|/tmp/mnt|')/run.sh"; do
+  [ -f "$p" ] && exec sh "$p" "$M"
+done
+
+# Fallback: if not found, notify user via jci-dialog
+/jci/tools/jci-dialog --info --title="oem-aa-mod" --text="ERROR: run.sh not found on USB." --no-cancel &
+sleep 10; killall -q jci-dialog

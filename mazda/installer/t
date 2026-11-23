@@ -1,0 +1,9 @@
+#!/bin/sh
+# Trampoline called by CVE-2024-8359 .up filename injection.
+# The .up crafted filename encodes "sh /mnt/sd[abcd]1/t" (or /tmp/mnt/...)
+# via awk sprintf to avoid FAT32-prohibited characters (/ * ? \ " < > | :).
+# mkdir is atomic: only one of the two .up files runs tweaks.sh at a time.
+# trap EXIT removes the lock so re-inserting the USB works again.
+mkdir /tmp/hud-up-lock 2>/dev/null || exit 0
+trap 'rmdir /tmp/hud-up-lock 2>/dev/null' EXIT
+sh "$(dirname "$0")/tweaks.sh"

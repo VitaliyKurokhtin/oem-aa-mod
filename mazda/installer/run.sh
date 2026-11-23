@@ -32,33 +32,49 @@ MODE="${1:-}"
 if [ -z "$MODE" ]
 then
   /jci/tools/jci-dialog --question \
-    --title="oem-aa-mod - Select mode" \
-    --text="Which integrations would you like to manage?" \
-    --ok-label="Both" \
-    --cancel-label="Choose one"
-  MODE_CHOICE=$?
+    --title="oem-aa-mod - Main Menu" \
+    --text="What would you like to do?\n• Install Mod: Install or manage HUD mod\n• Enable SSH: Open Wi-Fi SSH root access" \
+    --ok-label="Install Mod" \
+    --cancel-label="Enable SSH"
+  ACTION_CHOICE=$?
 
-  if [ "$MODE_CHOICE" -eq 0 ]
+  if [ "$ACTION_CHOICE" -ne 0 ]
   then
-    MODE="both"
+    MODE="ssh"
   else
     /jci/tools/jci-dialog --question \
       --title="oem-aa-mod - Select mode" \
-      --text="Which integration would you like to manage?" \
-      --ok-label="Android Auto" \
-      --cancel-label="CarPlay"
+      --text="Which integrations would you like to manage?" \
+      --ok-label="Both" \
+      --cancel-label="Choose one"
     MODE_CHOICE=$?
 
     if [ "$MODE_CHOICE" -eq 0 ]
     then
-      MODE="aa"
+      MODE="both"
     else
-      MODE="carplay"
+      /jci/tools/jci-dialog --question \
+        --title="oem-aa-mod - Select mode" \
+        --text="Which integration would you like to manage?" \
+        --ok-label="Android Auto" \
+        --cancel-label="CarPlay"
+      MODE_CHOICE=$?
+
+      if [ "$MODE_CHOICE" -eq 0 ]
+      then
+        MODE="aa"
+      else
+        MODE="carplay"
+      fi
     fi
   fi
 fi
 
 case "$MODE" in
+  ssh)
+    MODE_LABEL="Enable SSH"
+    LOG_SUFFIX="-ssh"
+    ;;
   both)
     MODE_LABEL="Android Auto + CarPlay"
     LOG_SUFFIX=""
@@ -72,7 +88,7 @@ case "$MODE" in
     LOG_SUFFIX="-carplay"
     ;;
   *)
-    echo "Usage: $0 [both|aa|carplay]" >&2
+    echo "Usage: $0 [both|aa|carplay|ssh]" >&2
     exit 2
     ;;
 esac
@@ -225,6 +241,28 @@ restore_orig() {
   fi
   return 1
 }
+
+# --- Handle SSH action directly without asking Install/Uninstall ---
+if [ "$MODE" = "ssh" ]; then
+  exec > "${MYDIR}/logs/enable_ssh.log" 2>&1
+  echo "=== oem-aa-mod Enable SSH start (session only) ==="
+
+  /usr/sbin/sshd 2>/dev/null
+  echo "root:mazda" | chpasswd 2>/dev/null
+  echo "cmu:jci" | chpasswd 2>/dev/null
+
+  sync
+  echo "=== oem-aa-mod Enable SSH complete ==="
+
+  killall -q jci-dialog 2>/dev/null
+  /jci/tools/jci-dialog --info \
+    --title="SSH Enabled" \
+    --text="SSH service is active for this session only!\nConnect laptop to car Wi-Fi hotspot:\n• IP: 192.168.53.1 (Port 22/36000)\n• user: root / pass: mazda\n• user: cmu  / pass: jci\n(SSH turns off automatically on car restart)" \
+    --no-cancel &
+  sleep 15
+  killall -q jci-dialog 2>/dev/null
+  exit 0
+fi
 
 # --- Prompt user: Install or Uninstall ---
 /jci/tools/jci-dialog --question \
@@ -484,6 +522,13 @@ else
     do
       [ -f "$conf" ] && restore_orig "$conf"
     done
+  fi
+
+  # Clean up any residual stage_wifi.sh edits
+  if [ -f /jci/scripts/stage_wifi.sh.bak ]; then
+    cp -a /jci/scripts/stage_wifi.sh.bak /jci/scripts/stage_wifi.sh && rm -f /jci/scripts/stage_wifi.sh.bak
+  elif grep -q "sshd" /jci/scripts/stage_wifi.sh 2>/dev/null; then
+    sed -i '/sshd/d' /jci/scripts/stage_wifi.sh 2>/dev/null
   fi
 
   rmdir "$MOD_DIR" 2>/dev/null && echo "Removed ${MOD_DIR} directory"

@@ -31,43 +31,24 @@ copy_file() {
 }
 
 # Copy known log files/paths.
-for name in msgtype_diag.log nav_diag.log splim_udpd.log; do
-  src_path="$SRC_DIR/$name"
-  copy_file "$src_path"
-  rc=$?
-  if [ "$rc" -eq 0 ]; then
-    echo "Copied $src_path"
-  elif [ "$rc" -eq 2 ]; then
-    echo "Not found: $src_path"
-  fi
+for path in /tmp/carplay_bridge.log /data_persist/msgtype_diag.log /data_persist/nav_diag.log /data_persist/splim_udpd.log; do
+  copy_file "$path" || true
 done
+
+# Dump system logcat / dmesg if available
+if command -v logcat >/dev/null 2>&1; then
+  logcat -d > "$DST_DIR/logcat.log" 2>/dev/null || true
+fi
+dmesg > "$DST_DIR/dmesg.log" 2>/dev/null || true
 
 # Ensure data is written to disk
 sync
 
-# Clean up originals safely:
-# - truncate files to zero length
-# - remove contents of nav_diag directory if present
-
-if [ -f "$SRC_DIR/msgtype_diag.log" ]; then
-  : > "$SRC_DIR/msgtype_diag.log" || echo "Warning: failed to truncate msgtype_diag.log"
-  echo "Truncated $SRC_DIR/msgtype_diag.log"
-fi
-
-if [ -f "$SRC_DIR/nav_diag.log" ]; then
-  : > "$SRC_DIR/nav_diag.log" || echo "Warning: failed to truncate nav_diag.log"
-  echo "Truncated $SRC_DIR/nav_diag.log"
-fi
-
-if [ -f "$SRC_DIR/splim_udpd.log" ]; then
-  : > "$SRC_DIR/splim_udpd.log" || echo "Warning: failed to truncate splim_udpd.log"
-  echo "Truncated $SRC_DIR/splim_udpd.log"
-fi
-
+# Clean up legacy diagnostic files on flash if present:
+rm -f "$SRC_DIR/msgtype_diag.log" "$SRC_DIR/nav_diag.log" "$SRC_DIR/splim_udpd.log"
 if [ -d "$SRC_DIR/nav_diag" ]; then
-  # remove files inside but keep the directory itself
-  rm -rf "$SRC_DIR/nav_diag"/* || echo "Warning: failed to clean $SRC_DIR/nav_diag"
-  echo "Cleaned $SRC_DIR/nav_diag/"
+  rm -rf "$SRC_DIR/nav_diag"
+fi
 fi
 
 echo "Done: logs copied to $DST_DIR and originals cleaned."
