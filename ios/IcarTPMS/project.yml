@@ -1,0 +1,68 @@
+name: IcarTPMS
+options:
+  bundleIdPrefix: com.binhho
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    DEVELOPMENT_TEAM: S74BX8QKG8
+    CODE_SIGN_STYLE: Automatic
+    CURRENT_PROJECT_VERSION: 5
+    MARKETING_VERSION: 0.1.4
+    TARGETED_DEVICE_FAMILY: "1"
+targets:
+  IcarTPMS:
+    type: application
+    platform: iOS
+    sources:
+      - path: IcarTPMS
+      - path: Shared
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.binhho.icar-tpms
+      GENERATE_INFOPLIST_FILE: YES
+      INFOPLIST_KEY_CFBundleDisplayName: iCar TPMS
+      INFOPLIST_KEY_UILaunchScreen_Generation: YES
+      INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription: "Connects to the iCar C33 TPMS BLE receiver."
+      INFOPLIST_KEY_NSBluetoothPeripheralUsageDescription: "Bluetooth reads tire pressure from the C33 receiver."
+      INFOPLIST_KEY_NSSupportsLiveActivities: YES
+      INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+      INFOPLIST_KEY_UIRequiresFullScreen: YES
+    info:
+      path: IcarTPMS/Info.plist
+      properties:
+        UIBackgroundModes:
+          - bluetooth-central
+        NSSupportsLiveActivities: true
+        UIRequiresFullScreen: true
+    entitlements:
+      path: IcarTPMS/IcarTPMS.entitlements
+    dependencies:
+      - target: IcarTPMSLiveActivity
+        embed: true
+
+  IcarTPMSLiveActivity:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Shared
+      - path: IcarTPMSLiveActivity
+        excludes:
+          - Info.plist
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.binhho.icar-tpms.live-activity
+      GENERATE_INFOPLIST_FILE: YES
+      INFOPLIST_KEY_CFBundleDisplayName: TPMS Live
+      INFOPLIST_KEY_NSExtension_NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    info:
+      path: IcarTPMSLiveActivity/Info.plist
+      properties:
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+schemes:
+  IcarTPMS:
+    build:
+      targets:
+        IcarTPMS: all
+        IcarTPMSLiveActivity: all

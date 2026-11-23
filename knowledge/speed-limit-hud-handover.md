@@ -1,7 +1,7 @@
 # Handover: VietMap speed limit → Mazda HUD (CMU150)
 
-**Date:** 2026-11-22  
-**Scope:** Research + architecture decision (not full implementation).  
+**Date:** 2026-11-22 (impl. update 2026-11-23)  
+**Scope:** Architecture + implementation of ESP32 bridge + CMU `splim_seriald`.  
 **Targets:** VietMap Live iOS IPA (~3.3.2), Mazda CMU150 FW **74.00.324A**, repo `oem-aa-mod`.
 
 ---
@@ -104,7 +104,7 @@ File: `mazda/patches/blmjcicarplay/hud/hud_send.cpp`
 |--------|--------|
 | `libpatch-carplayd.so` OCR | Implemented; **`carplay_ocr` default false** |
 | `splim_udpd` | **Diagnostic only** — binds UDP **:50505**, logs to `/data_persist/splim_udpd.log`, **does not write `splim`** |
-| Serial daemon | **Not implemented** (proposed as `splim_seriald`) |
+| Serial daemon | **Implemented** — `mazda/tools/splim_seriald/` (`make splim_seriald`) |
 
 ### 4.3 OCR pipeline (reference)
 ```text
@@ -172,44 +172,45 @@ Use a **USB hub**: CarPlay on one port, ESP32 on another. Watch `usb_authd` / ud
 
 ## 6. Target architecture (detail)
 
-### 6.1 ESP32 firmware
-1. BLE Peripheral spoofing VietMap HUD GATT (`FFF0`… / device name / services as RE’d from `vietmap_hud_sdk` or a real H50 capture).
-2. Parse **LimitSpeed** (and optionally other fields).
-3. Over USB CDC, emit a simple line protocol, e.g.:
+### 6.1 ESP32 firmware — **done**
+Path: [`firmware/vmhud-esp32-s3/`](../firmware/vmhud-esp32-s3/README.md)
+
+1. BLE Peripheral spoofing VietMap HUD GATT (`FFF0`… / name `VIETMAP-HUD`).
+2. Parse camera/limit CMD `0x01` → posted km/h.
+3. USB CDC line protocol:
    ```text
    SPLIM 60\n
    ```
-4. Keepalive every **2–3 s** (HUD treats `splim` stale after **8 s**).
+4. Keepalive every **2 s** (HUD treats `splim` stale after **8 s**).
 
-### 6.2 CMU daemon (to build)
-**Preferred first:** `splim_seriald` (mirror `tools/splim_udpd/`):
-- Open `/dev/ttyACM0` (configurable).
-- Parse `SPLIM <kmh>`; validate 5–200.
-- Atomic write `/data_persist/splim` (`tmp` + `rename`), same format as OCR.
+Display-equipped T-Display variant (parent tree): `../firmware/vmhud-tdisplay-s3`.
 
-**Alt:** ESP32 USB-net + finish `splim_udpd` so it **writes** `splim` (today log-only).
+### 6.2 CMU daemon — **done**
+`mazda/tools/splim_seriald/`:
+- Auto-opens `/dev/ttyACM*` then `ttyUSB*` (or `SPLIM_SERIAL_DEV` / argv).
+- Parses `SPLIM <kmh>`; validates 5–200.
+- Atomic write `/data_persist/splim` (`tmp` + `rename`).
+- Lock file `/data_persist/splim_seriald.lock` for exclusivity.
 
-Launch pattern (like UDP):
+Launch (from `hud_send` when `carplay_seriald_launch=true`):
 ```sh
 pgrep splim_seriald >/dev/null 2>&1 || setsid sh /data_persist/splim_seriald_start.sh &
 ```
-Wire from `hud_send` when `carplay_speed_limit` is on; extend installer `run.sh`.
 
 ### 6.3 Config (device)
 `/data_persist/oem-aa-mod/libpatch-carplay.conf`:
 ```conf
 carplay_speed_limit = true
-carplay_ocr = false
 carplay_udpd_launch = false
+carplay_seriald_launch = true
 ```
-Single writer to `splim` only.
+Single writer to `splim` only (leave OCR off if present).
 
-### 6.4 Implementation order
-1. **CMU USB bring-up** — prove `ttyACM*` with Super Mini.
-2. **Serial → splim → HUD** — ESP32 sends fixed `SPLIM 60` (no BLE yet).
-3. **BLE spoof** — RE VietMap HUD protocol; bind limit → serial.
-4. **Installer + docs** — package daemon like `splim_udpd`.
-5. Optionally keep OCR as documented fallback.
+### 6.4 Bring-up order
+1. Flash ESP32 (`firmware/vmhud-esp32-s3`); prove `SPLIM` on host serial.
+2. Install CMU payload (`make installer`); enable config above; reboot / restart `jciCARPLAY`.
+3. On CMU: `ls /dev/ttyACM*`, `pgrep splim_seriald`, `cat /data_persist/splim`.
+4. Connect VietMap HUD → navigate → HUD speed-limit sign.
 
 ---
 
@@ -221,6 +222,8 @@ Single writer to `splim` only.
 | `oem-aa-mod/mazda/patches/blmjcicarplay/nav.cpp` | iAP2 TBT (no speed limit) |
 | `oem-aa-mod/mazda/patches/carplayd/` | VietMap badge OCR |
 | `oem-aa-mod/mazda/tools/splim_udpd/` | UDP listener (log-only today) |
+| `oem-aa-mod/mazda/tools/splim_seriald/` | USB CDC → `/data_persist/splim` |
+| `oem-aa-mod/firmware/vmhud-esp32-s3/` | ESP32 Super Mini BLE HUD + SPLIM |
 | `oem-aa-mod/resources/libpatch-carplay.conf` | Runtime flags |
 | `oem-aa-mod/docs/carplay-ocr.md` | OCR enable/calibrate |
 | `oem-aa-mod/docs/installation.md` | LD_PRELOAD / install |

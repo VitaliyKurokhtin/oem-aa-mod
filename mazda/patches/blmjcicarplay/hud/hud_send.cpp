@@ -575,10 +575,13 @@ void *sender_main(void *)
 
     // [SHARE-AA-SPLIM] When a unit shares the AA mod's /data_persist/splim (the AA mod's
     // splim_udpd already writes it), CarPlay must be a PURE READER and MUST NOT spin up its own
-    // splim_udpd — a second/competing UDP daemon is exactly the data-path "nhầm lẫn" to avoid
+    // splim_udpd — a second/competing UDP daemon is exactly the data-path confusion to avoid
     // (one daemon + one file, shared by AA + CarPlay). So the launcher is gated off by
     // carplay_udpd_launch = false. It is also implicitly off whenever carplay_speed_limit is off
     // (nav-only), since there is no limit to read.
+    //
+    // VietMap BLE → ESP32 USB CDC path uses splim_seriald instead (carplay_seriald_launch).
+    // Keep a single writer of /data_persist/splim: do not enable both UDP and serial launchers.
     if (libpatch_config::carplay_speed_limit() &&
         libpatch_config::carplay_udpd_launch()) {
         // Ensure the speed-limit UDP listener (splim_udpd) is running. The CMU's
@@ -590,6 +593,13 @@ void *sender_main(void *)
         // UDP:50505 is the exclusivity backstop, so this is safe to call every start.
         system("pgrep splim_udpd >/dev/null 2>&1 || "
                "setsid sh /data_persist/splim_udpd_start.sh >/dev/null 2>&1 &");
+    }
+    if (libpatch_config::carplay_speed_limit() &&
+        libpatch_config::carplay_seriald_launch()) {
+        // ESP32 CDC "SPLIM <km/h>" → /data_persist/splim. Same self-healing trigger as
+        // splim_udpd; exclusivity via flock on /data_persist/splim_seriald.lock.
+        system("pgrep splim_seriald >/dev/null 2>&1 || "
+               "setsid sh /data_persist/splim_seriald_start.sh >/dev/null 2>&1 &");
     }
 
     NaviSnapshot prev = {};

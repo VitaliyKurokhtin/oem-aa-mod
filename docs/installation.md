@@ -262,7 +262,8 @@ case-insensitive.
 | --- | --- | --- | --- |
 | `carplay_vn_normalize` | `true` / `false` | `true` | Fold HUD-unrenderable Vietnamese street-name letters to the nearest renderable form (see the note below). |
 | `carplay_speed_limit` | `true` / `false` | `false` | Show the posted speed limit on the HUD. Requires the shared speed-limit feed; off = navigation-only (see the note below). |
-| `carplay_udpd_launch` | `true` / `false` | `true` | Auto-launch the shared `splim_udpd` listener. Only acts when `carplay_speed_limit = true`; set `false` if the Android Auto mod already runs it (see the note below). |
+| `carplay_udpd_launch` | `true` / `false` | `true` | Auto-launch the shared `splim_udpd` listener. Only acts when `carplay_speed_limit = true`; set `false` if the Android Auto mod already runs it, or when using ESP32 `splim_seriald` (see the note below). |
+| `carplay_seriald_launch` | `true` / `false` | `false` | Auto-launch `splim_seriald` (ESP32 USB CDC → `/data_persist/splim`). Only acts when `carplay_speed_limit = true`; keep a single writer (see the note below). |
 | `carplay_nav_diag` | `true` / `false` | `false` | **Developer/RE aid** — dump decoded nav payloads to `/data_persist/nav_diag.log`. Writes location data; leave off (see the note below). |
 | `carplay_msgtype_diag` | `true` / `false` | `false` | **Developer/RE aid** — dump devmgr message types to `/data_persist/msgtype_diag.log`. Writes location data; leave off (see the note below). |
 | `carplay_hud_debug` | `true` / `false` | `false` | **Developer aid** — overlay raw turn codes on the HUD street strip when no glyph maps (see the note below). |
@@ -348,7 +349,16 @@ The `carplay_*` keys live in **`libpatch-carplay.conf`** and are read by the
   `splim_udpd` UDP listener. It only acts when `carplay_speed_limit = true`. Set it
   `false` on a unit where the Android Auto mod already runs `splim_udpd`, so CarPlay
   stays a pure reader of `/data_persist/splim` and never starts a second,
-  competing daemon.
+  competing daemon. Also set `false` when using the VietMap BLE → ESP32 path
+  (`carplay_seriald_launch = true`).
+
+- **`carplay_seriald_launch`** auto-starts `splim_seriald`, which reads
+  `SPLIM <km/h>` lines from an ESP32 USB CDC port (`/dev/ttyACM*` / `ttyUSB*`) and
+  atomically writes `/data_persist/splim`. Only acts when `carplay_speed_limit =
+  true`. Recommended VietMap config:
+  `carplay_speed_limit = true`, `carplay_seriald_launch = true`,
+  `carplay_udpd_launch = false`. Firmware:
+  [`firmware/vmhud-esp32-s3`](../firmware/vmhud-esp32-s3/README.md).
 
 - **`carplay_nav_diag`** / **`carplay_msgtype_diag`** are reverse-engineering aids
   that append raw navigation payloads / message metadata to

@@ -1,0 +1,5 @@
+{
+  "mac": "98:c3:77:63:3b:1c",
+  "label": "ESP32-S3 Super Mini (set MAC from pio device list / scripts/esp32_resolve_port.sh)",
+  "boot_markers": ["vmhud-esp32-s3", "[BOOT]"]
+}

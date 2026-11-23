@@ -54,6 +54,11 @@
 //   carplay_udpd_launch  = true|false auto-launch the shared splim_udpd listener; read by
 //                                     blmjcicarplay, only acts when carplay_speed_limit = true
 //                                     (default true)
+//   carplay_seriald_launch = true|false auto-launch splim_seriald (ESP32 USB CDC → splim);
+//                                     read by blmjcicarplay, only acts when
+//                                     carplay_speed_limit = true (default false). Prefer a
+//                                     single writer of /data_persist/splim — set
+//                                     carplay_udpd_launch=false when enabling this.
 //   carplay_nav_diag     = true|false dump every decoded nav maneuver/guidance payload to
 //                                     /data_persist/nav_diag.log (RE aid; LOGS LOCATION DATA —
 //                                     read by blmjcicarplay, default false)
@@ -258,6 +263,7 @@ struct Settings {
     bool         carplay_vn_normalize = true;   // blmjcicarplay: fold VN 3-byte street names for the HUD font
     bool         carplay_speed_limit  = false;  // blmjcicarplay: read + show the posted speed limit
     bool         carplay_udpd_launch  = true;   // blmjcicarplay: auto-launch splim_udpd (only when speed_limit)
+    bool         carplay_seriald_launch = false; // blmjcicarplay: auto-launch splim_seriald (ESP32 CDC)
     bool         carplay_nav_diag     = false;  // blmjcicarplay: dump nav payloads to disk (RE aid; location data)
     bool         carplay_msgtype_diag = false;  // blmjcicarplay: dump devmgr msg types to disk (RE aid; location data)
     bool         carplay_hud_debug    = false;  // blmjcicarplay: overlay raw turn codes on the HUD street strip
@@ -318,6 +324,8 @@ inline void apply_kv(const char *key, const char *val, void *ud)
         s.carplay_speed_limit = parse_bool(val, s.carplay_speed_limit);
     } else if (strcasecmp(key, "carplay_udpd_launch") == 0) {
         s.carplay_udpd_launch = parse_bool(val, s.carplay_udpd_launch);
+    } else if (strcasecmp(key, "carplay_seriald_launch") == 0) {
+        s.carplay_seriald_launch = parse_bool(val, s.carplay_seriald_launch);
     } else if (strcasecmp(key, "carplay_nav_diag") == 0) {
         s.carplay_nav_diag = parse_bool(val, s.carplay_nav_diag);
     } else if (strcasecmp(key, "carplay_msgtype_diag") == 0) {
@@ -339,6 +347,7 @@ inline void log_effective(const char *prefix)
          "mute_pauses_phone=%s block_headunit_media_play=%s "
          "fallback_audio_off=%s "
          "carplay_vn_normalize=%s carplay_speed_limit=%s carplay_udpd_launch=%s "
+         "carplay_seriald_launch=%s "
          "carplay_nav_diag=%s carplay_msgtype_diag=%s carplay_hud_debug=%s",
          prefix,
          s.touch ? "true" : "false",
@@ -354,6 +363,7 @@ inline void log_effective(const char *prefix)
          s.carplay_vn_normalize ? "true" : "false",
          s.carplay_speed_limit ? "true" : "false",
          s.carplay_udpd_launch ? "true" : "false",
+         s.carplay_seriald_launch ? "true" : "false",
          s.carplay_nav_diag ? "true" : "false",
          s.carplay_msgtype_diag ? "true" : "false",
          s.carplay_hud_debug ? "true" : "false");
@@ -406,6 +416,7 @@ inline bool         fallback_audio_off() { return settings().fallback_audio_off;
 inline bool         carplay_vn_normalize() { return settings().carplay_vn_normalize; }
 inline bool         carplay_speed_limit()  { return settings().carplay_speed_limit; }
 inline bool         carplay_udpd_launch()  { return settings().carplay_udpd_launch; }
+inline bool         carplay_seriald_launch() { return settings().carplay_seriald_launch; }
 inline bool         carplay_nav_diag()     { return settings().carplay_nav_diag; }
 inline bool         carplay_msgtype_diag() { return settings().carplay_msgtype_diag; }
 inline bool         carplay_hud_debug()    { return settings().carplay_hud_debug; }

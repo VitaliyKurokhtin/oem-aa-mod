@@ -1,6 +1,6 @@
 # VIETMAP LIVE ↔ ESP32 connection (BLE HUD emulator)
 
-Technical guide for firmware **`firmware/vmhud-tdisplay-s3`**: how the VietMap app discovers, lists, connects, and sends **speed limits** / navigation over BLE.
+Technical guide for VietMap HUD BLE emulator firmware: how the app discovers, lists, connects, and sends **speed limits** / navigation over BLE.
 
 Related docs:
 
@@ -9,7 +9,8 @@ Related docs:
 | [agent-tmp-artifacts.md](agent-tmp-artifacts.md) | Where agents find `tmp/mazda_cmu_fw` + `tmp/vietmap_ipa_extract` |
 | [vietmap-hud-sdk-decompile.md](vietmap-hud-sdk-decompile.md) | iOS SDK asm/pseudo: scan, name filter, list |
 | [speed-limit-hud-handover.md](speed-limit-hud-handover.md) | ESP32 → CMU → Mazda HUD |
-| [../firmware/vmhud-tdisplay-s3/README.md](../firmware/vmhud-tdisplay-s3/README.md) | Flash firmware, safe upload |
+| [../firmware/vmhud-esp32-s3/README.md](../firmware/vmhud-esp32-s3/README.md) | Super Mini (CMU USB) firmware |
+| Parent `firmware/vmhud-tdisplay-s3` | LilyGO T-Display S3 (display UI) |
 
 ---
 
@@ -159,15 +160,14 @@ ESP displays limit from **CMD `0x01`** and prints USB `SPLIM <km/h>`.
 
 ---
 
-## 7. Speed limit → Mazda (optional)
-
-Current firmware:
+## 7. Speed limit → Mazda
 
 ```text
-VietMap CMD 0x01 → posted limit (byte) → T-Display + line "SPLIM N\n" (USB CDC 115200)
+VietMap CMD 0x01 → posted limit (byte) → "SPLIM N\n" every 2 s (USB CDC 115200)
+  → CMU splim_seriald → /data_persist/splim → libpatch-blmjcicarplay HUD
 ```
 
-Mazda HUD path (not in this repo yet): USB → `splim_seriald` → `/data_persist/splim` — [speed-limit-hud-handover.md](speed-limit-hud-handover.md).
+CMU: `make splim_seriald`, enable `carplay_seriald_launch=true` — [speed-limit-hud-handover.md](speed-limit-hud-handover.md).
 
 ---
 
@@ -216,12 +216,12 @@ asyncio.run(main())
 ## 9. Flash firmware (summary)
 
 ```bash
-cd firmware/vmhud-tdisplay-s3
-cp .esp32-target.json.example .esp32-target.json   # pin T-Display MAC
+cd firmware/vmhud-esp32-s3
+cp .esp32-target.json.example .esp32-target.json   # pin Super Mini MAC
 ./scripts/flash.sh
 ```
 
-T-Display often needs `upload_flags = --no-stub` in `platformio.ini` if `pio upload` fails after stub.
+T-Display (parent tree) often needs `upload_flags = --no-stub` if stub upload fails.
 
 ---
 

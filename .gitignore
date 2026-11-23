@@ -1,2 +1,8 @@
 build_output*.txt
 tmp/
+ios/IcarTPMS/build/
+ios/IcarTPMS/*.xcodeproj
+ios/IcarTPMS/*.xcworkspace
+firmware/**/.pio/
+firmware/**/.esp32-target.json
+mazda/build/

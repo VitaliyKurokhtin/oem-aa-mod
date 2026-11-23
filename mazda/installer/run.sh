@@ -98,12 +98,51 @@ bak_orig() {
   fi
 }
 
+# safe_replace <new-content-file> <dest>
+# Replace <dest> without ever leaving it truncated: write a sibling temp copy (same
+# mode/owner), flush, then rename (atomic). A plain `cp new dest` cut short by a power
+# loss would leave a broken sm.conf = unit that no longer boots. Refuses an empty source
+# so a failed pipeline can never blank a boot config.
+safe_replace() {
+  src="$1"; dst="$2"
+  if [ ! -s "$src" ]; then
+    echo "  refusing to replace ${dst}: new content is empty"
+    return 1
+  fi
+  if cp -a "$dst" "${dst}.oaam.tmp" && cat "$src" > "${dst}.oaam.tmp" &&
+     sync && mv "${dst}.oaam.tmp" "$dst"; then
+    return 0
+  fi
+  rm -f "${dst}.oaam.tmp"
+  return 1
+}
+
+# strip_carplay_ldpath <conf>
+# Remove the LD_LIBRARY_PATH line this installer adds, but only inside the jciCARPLAY
+# <service> stanza. A file-wide grep would also delete that same line from any other
+# service that ships it in the stock config.
+strip_carplay_ldpath() {
+  c="$1"
+  awk '
+    index($0, "name=\"jciCARPLAY\"") && /<service/ { inside = 1 }
+    inside && /LD_LIBRARY_PATH/ && /jci\/lib:\/usr\/lib/ && !done { done = 1; next }
+    { print }
+    inside && /<\/service>/ { inside = 0 }
+  ' "$c" > /tmp/oaam.clean && safe_replace /tmp/oaam.clean "$c"
+  rm -f /tmp/oaam.clean
+}
+
 # patch_service <service-name> <preload-so-abs-path> [extra_environ_line]
 # Injects LD_PRELOAD (+ an optional extra environ_var) into the stanza named
 # <service-name>, in exactly ONE sm config, idempotently and safely.
 patch_service() {
   svc="$1"; so="$2"; extra="$3"
   token=$(basename "$so")
+  # Never point LD_PRELOAD at a library that is not there (e.g. a failed copy above).
+  if [ ! -f "$so" ]; then
+    echo "  ${svc}: ${so} missing, not patching sm config"
+    return 0
+  fi
   preload_line="            <environ_var env_name=\"LD_PRELOAD\" env_value=\"${so}\"/>"
 
   # which confs actually define this service?
@@ -131,7 +170,7 @@ patch_service() {
     [ "$c" = "$target" ] && continue
     if grep -q "$token" "$c"; then
       bak_orig "$c"
-      grep -v "$token" "$c" > /tmp/oaam.clean && cp /tmp/oaam.clean "$c"
+      grep -v "$token" "$c" > /tmp/oaam.clean && safe_replace /tmp/oaam.clean "$c"
       rm -f /tmp/oaam.clean
       echo "  ${svc}: removed stale ${token} from ${c}"
     fi
@@ -147,8 +186,8 @@ patch_service() {
     ' "$target" > /tmp/oaam.new
     old=$(wc -l < "$target"); new=$(wc -l < /tmp/oaam.new)
     exp=$((old + 1)); [ -n "$extra" ] && exp=$((old + 2))
-    if [ "$new" -eq "$exp" ] && grep -q "$token" /tmp/oaam.new; then
-      cp /tmp/oaam.new "$target"
+    if [ "$new" -eq "$exp" ] && grep -q "$token" /tmp/oaam.new &&
+       safe_replace /tmp/oaam.new "$target"; then
       echo "  ${svc}: inserted LD_PRELOAD (${old}->${new} lines)"
     else
       echo "  ${svc}: SANITY FAILED (${old}->${new}, expected ${exp}), left untouched"
@@ -168,7 +207,7 @@ unpatch_service() {
   for c in /jci/sm/sm.conf /jci/sm/sm_WCP.conf; do
     [ -f "$c" ] || continue
     if grep -q "$token" "$c"; then
-      grep -v "$token" "$c" > /tmp/oaam.clean && cp /tmp/oaam.clean "$c"
+      grep -v "$token" "$c" > /tmp/oaam.clean && safe_replace /tmp/oaam.clean "$c"
       rm -f /tmp/oaam.clean
       echo "  removed ${token} lines from ${c}"
     fi
@@ -238,6 +277,18 @@ then
     chmod 0755 /data_persist/splim_udpd_start.sh
   elif includes_carplay; then
     echo "splim_udpd not in payload, skipping"
+  fi
+
+  # --- Install ESP32 USB serial → splim daemon (splim_seriald) -----------
+  # Preferred VietMap path: BLE HUD emulator → CDC "SPLIM N" → /data_persist/splim.
+  # Enable with carplay_seriald_launch=true (and usually carplay_udpd_launch=false).
+  if includes_carplay && [ -f "${MYDIR}/splim_seriald" ]; then
+    cp "${MYDIR}/splim_seriald" "${MOD_DIR}/" && echo "splim_seriald has been copied"
+    chmod 0755 "${MOD_DIR}/splim_seriald"
+    cp "${MYDIR}/splim_seriald_start.sh" /data_persist/ && echo "splim_seriald_start.sh has been copied"
+    chmod 0755 /data_persist/splim_seriald_start.sh
+  elif includes_carplay; then
+    echo "splim_seriald not in payload, skipping"
   fi
 
   # --- Patch each service independently (WCP-safe) -----------------------
@@ -320,8 +371,7 @@ else
         unpatch_service jciCARPLAY libpatch-blmjcicarplay.so
         unpatch_service jciMMUI    libpatch-svcjcimmui.so
         # the CarPlay LD_LIBRARY_PATH line has no .so token; strip it explicitly
-        grep -v 'LD_LIBRARY_PATH.*jci/lib:/usr/lib' "$conf" > /tmp/oaam.clean && cp /tmp/oaam.clean "$conf"
-        rm -f /tmp/oaam.clean
+        strip_carplay_ldpath "$conf"
       fi
     done
   else
@@ -338,8 +388,7 @@ else
       for conf in /jci/sm/sm.conf /jci/sm/sm_WCP.conf
       do
         [ -f "$conf" ] || continue
-        grep -v 'LD_LIBRARY_PATH.*jci/lib:/usr/lib' "$conf" > /tmp/oaam.clean && cp /tmp/oaam.clean "$conf"
-        rm -f /tmp/oaam.clean
+        strip_carplay_ldpath "$conf"
       done
     fi
     for conf in /jci/sm/sm.conf /jci/sm/sm_WCP.conf
@@ -393,12 +442,16 @@ else
     done
   fi
 
-  # --- Remove the speed-limit UDP daemon ---------------------------------
+  # --- Remove the speed-limit UDP / serial daemons -----------------------
   if includes_carplay
   then
     killall -q splim_udpd 2>/dev/null
     rm -f "${MOD_DIR}/splim_udpd" && echo "Removed splim_udpd"
     rm -f /data_persist/splim_udpd_start.sh && echo "Removed splim_udpd_start.sh"
+    killall -q splim_seriald 2>/dev/null
+    rm -f "${MOD_DIR}/splim_seriald" && echo "Removed splim_seriald"
+    rm -f /data_persist/splim_seriald_start.sh && echo "Removed splim_seriald_start.sh"
+    rm -f /data_persist/splim_seriald.lock
   fi
 
   # Shared Audio Off fallback stays while any AA/CarPlay shim remains.

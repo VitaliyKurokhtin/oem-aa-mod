@@ -19,6 +19,7 @@
 #   make <name>         -> release lib for one patch (e.g. `make blmjciaapa`)
 #   make <name>-debug   -> debug   lib for one patch (e.g. `make blmjciaapa-debug`)
 #   make splim_udpd     -> build the standalone UDP speed-limit daemon
+#   make splim_seriald  -> build the USB serial → /data_persist/splim daemon
 #   make installer      -> stage a ready-to-copy USB payload in build/installer/
 #   make clean          -> wipe build/
 
@@ -183,8 +184,8 @@ $(foreach p,$(PATCHES),$(eval $(call gen_patch_rules,$(p))))
 
 # --- splim_udpd: standalone speed-limit UDP daemon -------------------------
 # Not an LD_PRELOAD shim like the $(PATCHES) — a small standalone executable
-# that binds UDP:50505 and writes /data_persist/splim. Built with the same
-# cross toolchain but as a normal (non-PIC, non-shared) program.
+# that binds UDP:50505. DIAGNOSTIC/log-only today (does not write splim).
+# Built with the same cross toolchain but as a normal (non-PIC) program.
 SPLIM_SRC        := tools/splim_udpd/splim_udpd.c
 SPLIM_BIN        := $(RELEASE_DIR)/splim_udpd
 SPLIM_START      := tools/splim_udpd/splim_udpd_start.sh
@@ -193,6 +194,20 @@ SPLIM_START      := tools/splim_udpd/splim_udpd_start.sh
 splim_udpd: $(SPLIM_BIN)
 
 $(SPLIM_BIN): $(SPLIM_SRC)
+	@mkdir -p $(@D)
+	$(CXX) --sysroot=$(SYSROOT) -march=armv7-a -mtune=cortex-a9 -mfpu=neon \
+	       -O2 -Wall -Wextra -s -o $@ $<
+
+# --- splim_seriald: USB serial → /data_persist/splim ----------------------
+# Preferred VietMap path: ESP32 CDC "SPLIM <km/h>" → atomic write of splim.
+SPLIM_SERIAL_SRC   := tools/splim_seriald/splim_seriald.c
+SPLIM_SERIAL_BIN   := $(RELEASE_DIR)/splim_seriald
+SPLIM_SERIAL_START := tools/splim_seriald/splim_seriald_start.sh
+
+.PHONY: splim_seriald
+splim_seriald: $(SPLIM_SERIAL_BIN)
+
+$(SPLIM_SERIAL_BIN): $(SPLIM_SERIAL_SRC)
 	@mkdir -p $(@D)
 	$(CXX) --sysroot=$(SYSROOT) -march=armv7-a -mtune=cortex-a9 -mfpu=neon \
 	       -O2 -Wall -Wextra -s -o $@ $<
@@ -210,7 +225,7 @@ INSTALLER_SRC := installer
 RESOURCES_SRC := ../resources
 USB_DIR       := $(BUILD_DIR)/installer
 
-installer: release splim_udpd
+installer: release splim_udpd splim_seriald
 	rm -rf $(USB_DIR)
 	mkdir -p $(USB_DIR)
 	cp $(INSTALLER_SRC)/run.sh $(INSTALLER_SRC)/run-aa.sh \
@@ -219,6 +234,7 @@ installer: release splim_udpd
 	cp -r $(RESOURCES_SRC) $(USB_DIR)/resources
 	cp $(RELEASE_LIBS) $(USB_DIR)/
 	cp $(SPLIM_BIN) $(SPLIM_START) $(USB_DIR)/
+	cp $(SPLIM_SERIAL_BIN) $(SPLIM_SERIAL_START) $(USB_DIR)/
 	@echo "USB installer staged in $(USB_DIR)/ — copy its contents to the FAT32 USB root."
 
 clean:
