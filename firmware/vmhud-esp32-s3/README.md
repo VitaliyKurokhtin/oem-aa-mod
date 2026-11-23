@@ -81,8 +81,6 @@ Build/install `splim_seriald` (`make splim_seriald` / installer). Config in `/da
 
 ```conf
 carplay_speed_limit = true
-carplay_udpd_launch = false
-carplay_seriald_launch = true
 ```
 
 Details: [knowledge/speed-limit-hud-handover.md](../../knowledge/speed-limit-hud-handover.md).

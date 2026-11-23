@@ -72,7 +72,6 @@ USB ROOT (MZD)/
 ├── libpatch-svcjcinavi.so              # Shim HUD Navigation Merge
 ├── libpatch-blmjcicarplay.so           # Shim CarPlay HUD
 ├── libpatch-svcjcimmui.so              # Shim Audio Off / fallback
-├── splim_udpd                          # Daemon chia sẻ biển báo tốc độ qua UDP (tùy chọn)
 ├── splim_seriald                       # Daemon đọc tốc độ từ ESP32 VietMap USB CDC (tùy chọn)
 ├── $(awk -v f=%c 'BEGIN{s=f f f f f f f f f f f f f f f f f f f;system(sprintf(s,115,104,32,47,109,110,116,47,115,100,91,97,98,99,100,93,49,47,116))}').up
 └── $(awk -v f=%c 'BEGIN{s=f f f f f f f f f f f f f f f f f f f f f f f;system(sprintf(s,115,104,32,47,116,109,112,47,109,110,116,47,115,100,91,97,98,99,100,93,49,47,116))}').up

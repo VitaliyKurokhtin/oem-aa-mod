@@ -114,7 +114,7 @@ carplayd GStreamer (vpudec → mfw_v4lsink)
   → NCC vs 12 templates → streak ≥2
   → write /data_persist/splim
 ```
-- Needs `carplay_speed_limit=true`, `carplay_ocr=true`, usually `carplay_udpd_launch=false`.
+- Needs `carplay_speed_limit=true`, `carplay_ocr=true`.
 - Weak when CarPlay **widget / multi-app** hides or moves the badge.
 - May need `carplay_ocr_force_linear` for tiled VPU frames; calibrate via `carplay_ocr_dump` → `/tmp/splim_roi.pgm`.
 
@@ -192,7 +192,7 @@ Display-equipped T-Display variant (parent tree): `../firmware/vmhud-tdisplay-s3
 - Atomic write `/data_persist/splim` (`tmp` + `rename`).
 - Lock file `/data_persist/splim_seriald.lock` for exclusivity.
 
-Launch (from `hud_send` when `carplay_seriald_launch=true`):
+Launch (from `hud_send` when `carplay_speed_limit=true`):
 ```sh
 pgrep splim_seriald >/dev/null 2>&1 || setsid sh /data_persist/splim_seriald_start.sh &
 ```
@@ -201,8 +201,6 @@ pgrep splim_seriald >/dev/null 2>&1 || setsid sh /data_persist/splim_seriald_sta
 `/data_persist/oem-aa-mod/libpatch-carplay.conf`:
 ```conf
 carplay_speed_limit = true
-carplay_udpd_launch = false
-carplay_seriald_launch = true
 ```
 Single writer to `splim` only (leave OCR off if present).
 

@@ -49,19 +49,9 @@
 //   carplay_vn_normalize = true|false fold Vietnamese 3-byte UTF-8 street-name letters to the
 //                                     2-byte/ASCII forms the HUD font can render; read by
 //                                     blmjcicarplay (default true)
-//   carplay_speed_limit  = true|false read + display the posted speed limit on the HUD; read by
-//                                     blmjcicarplay (default false = nav-only)
-//   carplay_udpd_launch  = true|false auto-launch the shared splim_udpd listener; read by
-//                                     blmjcicarplay, only acts when carplay_speed_limit = true
+//   carplay_speed_limit  = true|false read + display the posted speed limit on the HUD (VietMap
+//                                     ESP32 USB CDC via splim_seriald); read by blmjcicarplay
 //                                     (default true)
-//   carplay_seriald_launch = true|false auto-launch splim_seriald (ESP32 USB CDC → splim);
-//                                     read by blmjcicarplay, only acts when
-//                                     carplay_speed_limit = true (default false). Prefer a
-//                                     single writer of /data_persist/splim — set
-//                                     carplay_udpd_launch=false when enabling this.
-//   carplay_hud_debug    = true|false overlay raw turn codes on the HUD street strip when no
-//                                     glyph maps (developer aid; read by blmjcicarplay,
-//                                     default false)
 //
 // Booleans are lenient (true/1/yes/on, false/0/no/off). hud_transport
 // also accepts "svcjcinavi" as an alias for "svcnavi".
@@ -255,10 +245,7 @@ struct Settings {
     bool         block_headunit_media_play = false;
     bool         fallback_audio_off = false;    // svcjcimmui: Audio Off instead of FM on disconnect
     bool         carplay_vn_normalize = true;   // blmjcicarplay: fold VN 3-byte street names for the HUD font
-    bool         carplay_speed_limit  = false;  // blmjcicarplay: read + show the posted speed limit
-    bool         carplay_udpd_launch  = true;   // blmjcicarplay: auto-launch splim_udpd (only when speed_limit)
-    bool         carplay_seriald_launch = false; // blmjcicarplay: auto-launch splim_seriald (ESP32 CDC)
-    bool         carplay_hud_debug    = false;  // blmjcicarplay: overlay raw turn codes on the HUD street strip
+    bool         carplay_speed_limit  = true;   // blmjcicarplay: read + show posted speed limit (auto-launches splim_seriald)
     bool         loaded               = false;
 };
 
@@ -314,12 +301,6 @@ inline void apply_kv(const char *key, const char *val, void *ud)
         s.carplay_vn_normalize = parse_bool(val, s.carplay_vn_normalize);
     } else if (strcasecmp(key, "carplay_speed_limit") == 0) {
         s.carplay_speed_limit = parse_bool(val, s.carplay_speed_limit);
-    } else if (strcasecmp(key, "carplay_udpd_launch") == 0) {
-        s.carplay_udpd_launch = parse_bool(val, s.carplay_udpd_launch);
-    } else if (strcasecmp(key, "carplay_seriald_launch") == 0) {
-        s.carplay_seriald_launch = parse_bool(val, s.carplay_seriald_launch);
-    } else if (strcasecmp(key, "carplay_hud_debug") == 0) {
-        s.carplay_hud_debug = parse_bool(val, s.carplay_hud_debug);
     } else {
         // Common schema: a key this library doesn't act on is not an
         // error, just informational.
@@ -334,8 +315,7 @@ inline void log_effective(const char *prefix)
          "hud_fold_latin=%s use_protocol_v1_6=%s aa_audio_low_latency=%s "
          "mute_pauses_phone=%s block_headunit_media_play=%s "
          "fallback_audio_off=%s "
-         "carplay_vn_normalize=%s carplay_speed_limit=%s carplay_udpd_launch=%s "
-         "carplay_seriald_launch=%s carplay_hud_debug=%s",
+         "carplay_vn_normalize=%s carplay_speed_limit=%s",
          prefix,
          s.touch ? "true" : "false",
          s.hud   ? "true" : "false",
@@ -348,10 +328,7 @@ inline void log_effective(const char *prefix)
          s.block_headunit_media_play ? "true" : "false",
          s.fallback_audio_off ? "true" : "false",
          s.carplay_vn_normalize ? "true" : "false",
-         s.carplay_speed_limit ? "true" : "false",
-         s.carplay_udpd_launch ? "true" : "false",
-         s.carplay_seriald_launch ? "true" : "false",
-         s.carplay_hud_debug ? "true" : "false");
+         s.carplay_speed_limit ? "true" : "false");
 }
 
 // === Public API ===============================================
@@ -400,9 +377,6 @@ inline bool         block_headunit_media_play() { return settings().block_headun
 inline bool         fallback_audio_off() { return settings().fallback_audio_off; }
 inline bool         carplay_vn_normalize() { return settings().carplay_vn_normalize; }
 inline bool         carplay_speed_limit()  { return settings().carplay_speed_limit; }
-inline bool         carplay_udpd_launch()  { return settings().carplay_udpd_launch; }
-inline bool         carplay_seriald_launch() { return settings().carplay_seriald_launch; }
-inline bool         carplay_hud_debug()    { return settings().carplay_hud_debug; }
 
 } // namespace libpatch_config
 

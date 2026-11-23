@@ -70,10 +70,7 @@ case-insensitive.
 | Key | Values | Default | Effect |
 | --- | --- | --- | --- |
 | `carplay_vn_normalize` | `true` / `false` | `true` | Fold HUD-unrenderable Vietnamese street-name letters to the nearest renderable form (see the note below). |
-| `carplay_speed_limit` | `true` / `false` | `false` | Show the posted speed limit on the HUD. Requires the shared speed-limit feed; off = navigation-only (see the note below). |
-| `carplay_udpd_launch` | `true` / `false` | `true` | Auto-launch the shared `splim_udpd` listener. Only acts when `carplay_speed_limit = true`; set `false` if the Android Auto mod already runs it, or when using ESP32 `splim_seriald` (see the note below). |
-| `carplay_seriald_launch` | `true` / `false` | `false` | Auto-launch `splim_seriald` (ESP32 USB CDC → `/data_persist/splim`). Only acts when `carplay_speed_limit = true`; keep a single writer (see the note below). |
-| `carplay_hud_debug` | `true` / `false` | `false` | **Developer aid** — overlay raw turn codes on the HUD street strip when no glyph maps (see the note below). |
+| `carplay_speed_limit` | `true` / `false` | `true` | Show the posted speed limit on the HUD and auto-launch `splim_seriald` (ESP32 USB CDC VietMap). Off = navigation-only (see the note below). |
 
 Booleans are lenient — `true`/`1`/`yes`/`on` and `false`/`0`/`no`/`off`
 are all accepted.
@@ -146,35 +143,18 @@ The `carplay_*` keys live in **`libpatch-carplay.conf`** and are read by the
   Set `false` to send names unchanged (a HUD with a full Vietnamese font, or a
   non-Vietnamese locale).
 
-- **`carplay_speed_limit`** shows the posted speed limit on the HUD. It needs the
-  shared speed-limit feed — the OCR daemon writing `/data_persist/splim`, plus
-  `carspeed_d` for the over-speed blink. Default `false` gives the navigation-only
-  HUD (maneuver + distance + road name). When `true`, the speed-limit sign stays
-  live after in-app navigation ends, mirroring the Android Auto behaviour.
+- **`carplay_speed_limit`** shows the posted speed limit on the HUD. When `true` (default),
+  it displays the speed limit circle and automatically starts `splim_seriald`, which reads
+  `SPLIM <km/h>` from an ESP32 USB CDC port (`/dev/ttyACM*` / `ttyUSB*`) and writes
+  `/data_persist/splim`. Setting `false` gives the navigation-only HUD (maneuver + distance +
+  road name). When `true`, the speed-limit sign stays live after in-app navigation ends,
+  mirroring the Android Auto behaviour.
+  Firmware: [`firmware/vmhud-esp32-s3`](../firmware/vmhud-esp32-s3/README.md).
 
-- **`carplay_udpd_launch`** lets the CarPlay shim auto-start the shared
-  `splim_udpd` UDP listener. It only acts when `carplay_speed_limit = true`. Set it
-  `false` on a unit where the Android Auto mod already runs `splim_udpd`, so CarPlay
-  stays a pure reader of `/data_persist/splim` and never starts a second,
-  competing daemon. Also set `false` when using the VietMap BLE → ESP32 path
-  (`carplay_seriald_launch = true`).
-
-- **`carplay_seriald_launch`** auto-starts `splim_seriald`, which reads
-  `SPLIM <km/h>` lines from an ESP32 USB CDC port (`/dev/ttyACM*` / `ttyUSB*`) and
-  atomically writes `/data_persist/splim`. Only acts when `carplay_speed_limit =
-  true`. Recommended VietMap config:
-  `carplay_speed_limit = true`, `carplay_seriald_launch = true`,
-  `carplay_udpd_launch = false`. Firmware:
-  [`firmware/vmhud-esp32-s3`](../firmware/vmhud-esp32-s3/README.md).
-
-- **Diagnostic logging**: In debug builds (`-DDEBUG`), diagnostic outputs are
-  automatically emitted to the system log (`stderr` / `/tmp/carplay_bridge.log`) with
-  clear namespaces (`[CP-NAV]`, `[CP-MSG]`, `[SPLIM-SERIAL]`, `[SPLIM-UDP]`) for easy querying,
-  without creating separate files on flash memory.
-- **`carplay_hud_debug`** overlays the raw turn codes
-  (`EV/S/A`) on the HUD street strip whenever the icon lookup finds no glyph — a
-  developer aid for extending the icon table; it corrupts the normal street display
-  while on, so it defaults `false`.
+- **Diagnostic aids & logging**: In debug builds (`-DDEBUG`):
+  - Diagnostic logs are automatically emitted to the system log (`stderr` / `/tmp/carplay_bridge.log`) with
+    clear namespaces (`[CP-NAV]`, `[CP-MSG]`, `[SPLIM-SERIAL]`) without creating separate files on flash memory.
+  - Raw turn codes (`EV/S/A`) are automatically overlaid on the HUD street line whenever a turn icon produces no matching glyph, helping developers extend the icon table.
 
 After editing either file, restart the affected service(s) — `jciAAPA`,
 `jcinavi` if you patched it, `aap_service` if you enabled `use_protocol_v1_6`

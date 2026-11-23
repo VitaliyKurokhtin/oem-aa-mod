@@ -157,32 +157,46 @@ info "[3/4] Đang sao chép các file kích hoạt và mã cài đặt..."
 export COPYFILE_DISABLE=1
 
 # 2.1 File kích hoạt cơ bản
-cp -f "$SCRIPT_DIR/jci-autoupdate"          "$TARGET_MOUNT/"
-cp -f "$SCRIPT_DIR/dataRetrieval_config.txt" "$TARGET_MOUNT/"
-cp -f "$SCRIPT_DIR/t"                        "$TARGET_MOUNT/"
-cp -f "$SCRIPT_DIR/h"                        "$TARGET_MOUNT/"
-cp -f "$SCRIPT_DIR/s"                        "$TARGET_MOUNT/"
-cp -f "$SCRIPT_DIR/tweaks.sh"                 "$TARGET_MOUNT/"
-cp -f "$SCRIPT_DIR/run.sh"                   "$TARGET_MOUNT/"
-cp -f "$SCRIPT_DIR/run-aa.sh"                "$TARGET_MOUNT/"
-cp -f "$SCRIPT_DIR/run-carplay.sh"           "$TARGET_MOUNT/"
-cp -f "$SCRIPT_DIR/mp3title.txt"             "$TARGET_MOUNT/"
+cp -f "$SCRIPT_DIR/jci-autoupdate"          "$TARGET_MOUNT/" 2>/dev/null || true
+cp -f "$SCRIPT_DIR/dataRetrieval_config.txt" "$TARGET_MOUNT/" 2>/dev/null || true
+cp -f "$SCRIPT_DIR/t"                        "$TARGET_MOUNT/" 2>/dev/null || true
+cp -f "$SCRIPT_DIR/h"                        "$TARGET_MOUNT/" 2>/dev/null || true
+cp -f "$SCRIPT_DIR/s"                        "$TARGET_MOUNT/" 2>/dev/null || true
+cp -f "$SCRIPT_DIR/tweaks.sh"                 "$TARGET_MOUNT/" 2>/dev/null || true
+cp -f "$SCRIPT_DIR/run.sh"                   "$TARGET_MOUNT/" 2>/dev/null || true
+cp -f "$SCRIPT_DIR/run-aa.sh"                "$TARGET_MOUNT/" 2>/dev/null || true
+cp -f "$SCRIPT_DIR/run-carplay.sh"           "$TARGET_MOUNT/" 2>/dev/null || true
+cp -f "$SCRIPT_DIR/mp3title.txt"             "$TARGET_MOUNT/" 2>/dev/null || true
+cp -f "$SCRIPT_DIR/dev.html"                 "$TARGET_MOUNT/" 2>/dev/null || true
 
-# 2.2 Thư mục MP3 và JS cho MP3-XSS
-mkdir -p "$TARGET_MOUNT/mp3" "$TARGET_MOUNT/js"
+# 2.2 Thư mục MP3, JS và CSS cho Webview UI / MP3-XSS
+mkdir -p "$TARGET_MOUNT/mp3" "$TARGET_MOUNT/js" "$TARGET_MOUNT/css"
 cp -rf "$SCRIPT_DIR/mp3/"*.mp3 "$TARGET_MOUNT/mp3/" 2>/dev/null || true
 cp -rf "$SCRIPT_DIR/mp3/"*.mp3 "$TARGET_MOUNT/"     2>/dev/null || true  # Bản sao ở root cho CMU autoplay
 cp -rf "$SCRIPT_DIR/js/"*      "$TARGET_MOUNT/js/"  2>/dev/null || true
+cp -rf "$SCRIPT_DIR/css/"*     "$TARGET_MOUNT/css/" 2>/dev/null || true
 
-# 2.3 Sao chép các file binary .so & cấu hình (nếu có trong build hoặc mazda/)
+# 2.3 Sao chép các file cấu hình resources/
 mkdir -p "$TARGET_MOUNT/resources"
-if [ -d "$REPO_ROOT/resources" ]; then
+if [ -d "$SCRIPT_DIR/resources" ]; then
+  cp -rf "$SCRIPT_DIR/resources/"* "$TARGET_MOUNT/resources/" 2>/dev/null || true
+elif [ -d "$REPO_ROOT/resources" ]; then
   cp -rf "$REPO_ROOT/resources/"* "$TARGET_MOUNT/resources/" 2>/dev/null || true
 fi
 
-# Tìm các file .so đã build trong mazda/build hoặc thư mục release
-find "$REPO_ROOT" -name "libpatch-*.so" -exec cp -f {} "$TARGET_MOUNT/" \; 2>/dev/null || true
-find "$REPO_ROOT" -name "splim_*" -maxdepth 3 -type f -perm +111 -exec cp -f {} "$TARGET_MOUNT/" \; 2>/dev/null || true
+# 2.4 Sao chép các file binary .so & daemon tốc độ
+# Ưu tiên các file nằm cùng thư mục script (khi giải nén từ release zip), sau đó tìm trong build/
+if ls "$SCRIPT_DIR"/libpatch-*.so >/dev/null 2>&1; then
+  cp -f "$SCRIPT_DIR"/libpatch-*.so "$TARGET_MOUNT/" 2>/dev/null || true
+elif [ -d "$REPO_ROOT" ]; then
+  find "$REPO_ROOT" -name "libpatch-*.so" -exec cp -f {} "$TARGET_MOUNT/" \; 2>/dev/null || true
+fi
+
+if ls "$SCRIPT_DIR"/splim_* >/dev/null 2>&1; then
+  cp -f "$SCRIPT_DIR"/splim_* "$TARGET_MOUNT/" 2>/dev/null || true
+elif [ -d "$REPO_ROOT" ]; then
+  find "$REPO_ROOT" -name "splim_*" -maxdepth 3 -type f -exec cp -f {} "$TARGET_MOUNT/" \; 2>/dev/null || true
+fi
 
 # -----------------------------------------------------------------------------
 # 3. Tạo 2 file .up khai thác lỗ hổng CVE-2024-8359

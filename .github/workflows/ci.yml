@@ -96,50 +96,46 @@ jobs:
       - name: Build (release + debug)
         run: make -C mazda -j"$(nproc)" all
 
-      - name: Package release + debug archives
+      - name: Stage USB installer packages
+        run: |
+          make -C mazda installer
+          make -C mazda installer-debug
+
+      - name: Package release + debug USB archives
         run: |
           set -euo pipefail
           VERSION="$(git rev-parse --short HEAD)"
-          mkdir -p dist
+          mkdir -p dist staging
 
-          # Same packaging as release.yml: one zip per config, .so
-          # keeps its canonical name in both, resources/ bundled in both.
-          # Normal (release) archive has no suffix; debug gets -debug.
+          # Packaging: two self-contained USB installer archives
+          # (Release and Debug). After unzipping, users can run make_usb.sh
+          # or copy the contents directly onto their FAT32 USB drive.
           for cfg in release debug; do
             case "$cfg" in
-              release) name="oem-aa-mod-${VERSION}" ;;
-              debug)   name="oem-aa-mod-${VERSION}-debug" ;;
+              release)
+                name="oem-aa-mod-${VERSION}"
+                src_dir="mazda/build/installer"
+                ;;
+              debug)
+                name="oem-aa-mod-${VERSION}-debug"
+                src_dir="mazda/build/installer-debug"
+                ;;
             esac
             stage="staging/${name}"
             mkdir -p "$stage"
-            cp mazda/build/"$cfg"/libpatch-*.so "$stage/"
-            cp -r resources "$stage/"
+            cp -r "$src_dir"/. "$stage/"
+
             # Catch a build that "succeeds" but links for the wrong target.
-            for so in "$stage"/libpatch-*.so; do
-              file "$so"
-              file "$so" | grep -q 'ELF 32-bit.*ARM' || {
-                echo "::error::$so is not an ARM shared object"; exit 1; }
+            for so in "$stage"/libpatch-*.so "$stage"/splim_seriald; do
+              if [ -f "$so" ]; then
+                file "$so" | grep -q 'ELF 32-bit.*ARM' || {
+                  echo "::error::$so is not an ARM binary"; exit 1; }
+              fi
             done
+
             # Wrapper dir inside the archive avoids a zip-bomb on extract.
             ( cd staging && zip -r "../dist/${name}.zip" "$name" )
           done
-
-          # Reuse the repo's own installer staging target; it assembles
-          # the ready-to-copy USB payload under mazda/build/installer/.
-          make -C mazda installer
-
-          installer_name="oem-aa-mod-${VERSION}-installer"
-          installer_stage="staging/${installer_name}"
-          mkdir -p "$installer_stage"
-          cp -r mazda/build/installer/. "$installer_stage/"
-
-          # Verify the staged payload contains the expected ARM shims.
-          for so in "$installer_stage"/libpatch-*.so; do
-            file "$so"
-            file "$so" | grep -q 'ELF 32-bit.*ARM' || {
-              echo "::error::$so is not an ARM shared object"; exit 1; }
-          done
-          ( cd staging && zip -r "../dist/${installer_name}.zip" "$installer_name" )
 
           ( cd dist && sha256sum ./*.zip > SHA256SUMS )
           echo "--- dist ---"

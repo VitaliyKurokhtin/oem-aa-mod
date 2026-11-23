@@ -88,30 +88,47 @@ set REPO_ROOT=%SCRIPT_DIR%..\..\
 
 echo.
 echo [2/4] Đang sao chép các file cài đặt vào !TARGET_BS!...
-copy /Y "%SCRIPT_DIR%jci-autoupdate" "!TARGET_BS!" >nul
-copy /Y "%SCRIPT_DIR%dataRetrieval_config.txt" "!TARGET_BS!" >nul
-copy /Y "%SCRIPT_DIR%t" "!TARGET_BS!" >nul
-copy /Y "%SCRIPT_DIR%h" "!TARGET_BS!" >nul
-copy /Y "%SCRIPT_DIR%s" "!TARGET_BS!" >nul
-copy /Y "%SCRIPT_DIR%tweaks.sh" "!TARGET_BS!" >nul
-copy /Y "%SCRIPT_DIR%run.sh" "!TARGET_BS!" >nul
-copy /Y "%SCRIPT_DIR%run-aa.sh" "!TARGET_BS!" >nul
-copy /Y "%SCRIPT_DIR%run-carplay.sh" "!TARGET_BS!" >nul
-copy /Y "%SCRIPT_DIR%mp3title.txt" "!TARGET_BS!" >nul
+copy /Y "%SCRIPT_DIR%jci-autoupdate" "!TARGET_BS!" >nul 2>nul
+copy /Y "%SCRIPT_DIR%dataRetrieval_config.txt" "!TARGET_BS!" >nul 2>nul
+copy /Y "%SCRIPT_DIR%t" "!TARGET_BS!" >nul 2>nul
+copy /Y "%SCRIPT_DIR%h" "!TARGET_BS!" >nul 2>nul
+copy /Y "%SCRIPT_DIR%s" "!TARGET_BS!" >nul 2>nul
+copy /Y "%SCRIPT_DIR%tweaks.sh" "!TARGET_BS!" >nul 2>nul
+copy /Y "%SCRIPT_DIR%run.sh" "!TARGET_BS!" >nul 2>nul
+copy /Y "%SCRIPT_DIR%run-aa.sh" "!TARGET_BS!" >nul 2>nul
+copy /Y "%SCRIPT_DIR%run-carplay.sh" "!TARGET_BS!" >nul 2>nul
+copy /Y "%SCRIPT_DIR%mp3title.txt" "!TARGET_BS!" >nul 2>nul
+copy /Y "%SCRIPT_DIR%dev.html" "!TARGET_BS!" >nul 2>nul
 
 mkdir "!TARGET_BS!mp3" 2>nul
 mkdir "!TARGET_BS!js" 2>nul
-xcopy /E /I /Y "%SCRIPT_DIR%mp3\*" "!TARGET_BS!mp3\" >nul
-xcopy /Y "%SCRIPT_DIR%mp3\*.mp3" "!TARGET_BS!" >nul
-xcopy /E /I /Y "%SCRIPT_DIR%js\*" "!TARGET_BS!js\" >nul
+mkdir "!TARGET_BS!css" 2>nul
+xcopy /E /I /Y "%SCRIPT_DIR%mp3\*" "!TARGET_BS!mp3\" >nul 2>nul
+xcopy /Y "%SCRIPT_DIR%mp3\*.mp3" "!TARGET_BS!" >nul 2>nul
+xcopy /E /I /Y "%SCRIPT_DIR%js\*" "!TARGET_BS!js\" >nul 2>nul
+xcopy /E /I /Y "%SCRIPT_DIR%css\*" "!TARGET_BS!css\" >nul 2>nul
 
 mkdir "!TARGET_BS!resources" 2>nul
-if exist "%REPO_ROOT%resources\" (
-  xcopy /E /I /Y "%REPO_ROOT%resources\*" "!TARGET_BS!resources\" >nul
+if exist "%SCRIPT_DIR%resources\" (
+  xcopy /E /I /Y "%SCRIPT_DIR%resources\*" "!TARGET_BS!resources\" >nul 2>nul
+) else if exist "%REPO_ROOT%resources\" (
+  xcopy /E /I /Y "%REPO_ROOT%resources\*" "!TARGET_BS!resources\" >nul 2>nul
 )
 
-for /r "%REPO_ROOT%" %%f in (libpatch-*.so) do (
-  copy /Y "%%f" "!TARGET_BS!" >nul 2>nul
+if exist "%SCRIPT_DIR%libpatch-*.so" (
+  copy /Y "%SCRIPT_DIR%libpatch-*.so" "!TARGET_BS!" >nul 2>nul
+) else (
+  for /r "%REPO_ROOT%" %%f in (libpatch-*.so) do (
+    copy /Y "%%f" "!TARGET_BS!" >nul 2>nul
+  )
+)
+
+if exist "%SCRIPT_DIR%splim_*" (
+  copy /Y "%SCRIPT_DIR%splim_*" "!TARGET_BS!" >nul 2>nul
+) else (
+  for /r "%REPO_ROOT%" %%f in (splim_*) do (
+    copy /Y "%%f" "!TARGET_BS!" >nul 2>nul
+  )
 )
 
 echo.

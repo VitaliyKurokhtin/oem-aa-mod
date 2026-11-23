@@ -1,20 +1,17 @@
 name: Release
 
-# Build the release assets, assemble an installer through the reusable
-# installer workflow, then publish a complete GitHub Release on every
-# pushed tag (the project tags as X.Y.Z, e.g. 0.3.0).
+# Build release and debug USB installer archives, then publish a complete
+# GitHub Release on every pushed tag (the project tags as X.Y.Z, e.g. 0.3.0).
 #
 # The cross compile is a plain `make -C mazda` driven by the in-repo
 # m3-toolchain submodule. Its binaries are x86_64 ELF, so they run
 # natively on the ubuntu-latest (x86_64) runner — no Docker, no qemu.
-# (The Dockerfile remains the local/reproducible path; CI just calls
-# the same Makefile directly for speed.)
 on:
   push:
     tags:
-      # Match X.Y.Z version tags only (GitHub glob: [0-9]+ = one or
-      # more digits, '.' is literal). Skips non-version / prerelease tags.
-      - '[0-9]+.[0-9]+.[0-9]+'
+      # Match X.Y.Z version tags (e.g. 0.3.0, 1.0.0, v1.0.0)
+      - '[0-9]+.[0-9]+.[0-9]+*'
+      - 'v[0-9]+.[0-9]+.[0-9]+*'
 
 # Required for `gh release create` to publish the release + assets.
 permissions:
@@ -53,12 +50,6 @@ jobs:
         if: steps.toolchain-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
-          # Fetch the toolchain as a plain directory (not a live git
-          # submodule): clone at the pinned SHA, then drop .git. This
-          # keeps the cache as plain files so it has no dangling gitlink
-          # for actions/checkout's post-job `git submodule foreach`
-          # cleanup to trip over (the cache restores the worktree but
-          # not .git/modules/...). The build only needs the files.
           url=$(git config -f .gitmodules submodule.mazda/m3-toolchain.url)
           rm -rf mazda/m3-toolchain
           git clone --filter=blob:none "$url" mazda/m3-toolchain
@@ -73,8 +64,6 @@ jobs:
             echo "::error::$gpp missing — m3-toolchain submodule did not check out"
             exit 1
           fi
-          # Catches the classic "LFS pointer instead of binary" failure
-          # with a clear message rather than a cryptic make error.
           if ! file "$gpp" | grep -q 'ELF'; then
             echo "::error::$gpp is not an ELF binary (Git LFS blobs not pulled?)"
             file "$gpp"
@@ -85,37 +74,44 @@ jobs:
       - name: Build (release + debug)
         run: make -C mazda -j"$(nproc)" all
 
-      - name: Package release + debug archives
+      - name: Stage USB installer packages
+        run: |
+          make -C mazda installer
+          make -C mazda installer-debug
+
+      - name: Package release + debug USB archives
         env:
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          mkdir -p dist
-          # One tar.gz per config. The .so keeps its canonical name
-          # inside every archive (matches the install docs: copy to
-          # /data_persist/oem-aa-mod/libpatch-<name>.so) — the archive
-          # name, not the .so name, distinguishes release vs debug.
-          # resources/ (the patched aap_system_attributes*.xml) is
-          # bundled in both so a release is self-contained for install.
-          # Normal (release) archive has no suffix; debug gets -debug.
+          mkdir -p dist staging
           for cfg in release debug; do
             case "$cfg" in
-              release) name="oem-aa-mod-${TAG}" ;;
-              debug)   name="oem-aa-mod-${TAG}-debug" ;;
+              release)
+                name="oem-aa-mod-${TAG}"
+                src_dir="mazda/build/installer"
+                ;;
+              debug)
+                name="oem-aa-mod-${TAG}-debug"
+                src_dir="mazda/build/installer-debug"
+                ;;
             esac
             stage="staging/${name}"
             mkdir -p "$stage"
-            cp mazda/build/"$cfg"/libpatch-*.so "$stage/"
-            cp -r resources "$stage/"
+            cp -r "$src_dir"/. "$stage/"
+
             # Catch a build that "succeeds" but links for the wrong target.
-            for so in "$stage"/libpatch-*.so; do
-              file "$so"
-              file "$so" | grep -q 'ELF 32-bit.*ARM' || {
-                echo "::error::$so is not an ARM shared object"; exit 1; }
+            for so in "$stage"/libpatch-*.so "$stage"/splim_seriald; do
+              if [ -f "$so" ]; then
+                file "$so" | grep -q 'ELF 32-bit.*ARM' || {
+                  echo "::error::$so is not an ARM binary"; exit 1; }
+              fi
             done
+
             # Wrapper dir inside the archive avoids a zip-bomb on extract.
             ( cd staging && zip -r "../dist/${name}.zip" "$name" )
           done
+
           ( cd dist && sha256sum ./*.zip > SHA256SUMS )
           echo "--- dist ---"
           ls -la dist
@@ -124,89 +120,16 @@ jobs:
             unzip -l "$archive"
           done
 
-      - name: Publish GitHub prerelease
+      - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          # Never overwrite an existing release — re-releasing the same
-          # tag is almost always a mistake and silently swapping assets
-          # is confusing. If you really mean to re-release, delete the
-          # release (and re-push the tag) by hand first.
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "::error::Release $TAG already exists — refusing to overwrite. Delete it manually to re-release."
             exit 1
           fi
           gh release create "$TAG" dist/*.zip dist/SHA256SUMS \
             --title "$TAG" \
-            --prerelease \
             --generate-notes
-
-  build-installer:
-    needs: release
-    permissions:
-      # GitHub validates permissions for every nested job, including the
-      # workflow_dispatch-only publish-self job that is skipped here.
-      contents: write
-    uses: Bijan-A/oem-aa-mod-installer/.github/workflows/build-installer.yml@5915bd65b66355458d301e3c274f316d5152e369
-    with:
-      upstream_tag: ${{ github.ref_name }}
-      upstream_repo: ${{ github.repository }}
-      installer_repo: Bijan-A/oem-aa-mod-installer
-      installer_ref: 5915bd65b66355458d301e3c274f316d5152e369
-
-  publish:
-    needs: build-installer
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      actions: read
-      contents: write
-    steps:
-      - name: Download installer artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ needs.build-installer.outputs.artifact_name }}
-          path: installer-dist
-
-      - name: Verify installer artifact
-        env:
-          INSTALLER_ZIP: ${{ needs.build-installer.outputs.installer_zip }}
-        run: |
-          set -euo pipefail
-          test -f "installer-dist/$INSTALLER_ZIP"
-          test -f "installer-dist/${INSTALLER_ZIP%.zip}.SHA256SUMS"
-          ( cd installer-dist && sha256sum -c "${INSTALLER_ZIP%.zip}.SHA256SUMS" )
-
-      - name: Build combined checksum manifest
-        env:
-          GH_TOKEN: ${{ github.token }}
-          INSTALLER_ZIP: ${{ needs.build-installer.outputs.installer_zip }}
-          TAG: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          mkdir release-dist
-          gh release download "$TAG" \
-            --repo "${{ github.repository }}" \
-            --pattern "oem-aa-mod-${TAG}.zip" \
-            --pattern "oem-aa-mod-${TAG}-debug.zip" \
-            --pattern SHA256SUMS \
-            --dir release-dist
-          cp "installer-dist/$INSTALLER_ZIP" release-dist/
-          cat "installer-dist/${INSTALLER_ZIP%.zip}.SHA256SUMS" \
-            >> release-dist/SHA256SUMS
-          ( cd release-dist && sha256sum -c SHA256SUMS )
-
-      - name: Attach installer to release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          INSTALLER_ZIP: ${{ needs.build-installer.outputs.installer_zip }}
-          TAG: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          gh release upload "$TAG" \
-            "installer-dist/$INSTALLER_ZIP" \
-            release-dist/SHA256SUMS \
-            --repo "${{ github.repository }}" \
-            --clobber

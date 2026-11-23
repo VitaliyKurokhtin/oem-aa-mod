@@ -167,7 +167,7 @@ VietMap CMD 0x01 → posted limit (byte) → "SPLIM N\n" every 2 s (USB CDC 1152
   → CMU splim_seriald → /data_persist/splim → libpatch-blmjcicarplay HUD
 ```
 
-CMU: `make splim_seriald`, enable `carplay_seriald_launch=true` — [speed-limit-hud-handover.md](speed-limit-hud-handover.md).
+CMU: `make splim_seriald`, enable `carplay_speed_limit=true` — [speed-limit-hud-handover.md](speed-limit-hud-handover.md).
 
 ---
 

@@ -304,22 +304,9 @@ then
   cp "${MYDIR}/resources/libpatch.conf" "${MOD_DIR}/" && echo "libpatch.conf has been copied"
   chmod 0644 "${MOD_DIR}"/libpatch-*.so
 
-  # --- Install the shared speed-limit UDP daemon (splim_udpd) ------------
-  # Used by the CarPlay HUD bridge when carplay_speed_limit=true. The launcher
-  # must live at the exact path the HUD bridge calls:
-  # /data_persist/splim_udpd_start.sh
-  if includes_carplay && [ -f "${MYDIR}/splim_udpd" ]; then
-    cp "${MYDIR}/splim_udpd" "${MOD_DIR}/" && echo "splim_udpd has been copied"
-    chmod 0755 "${MOD_DIR}/splim_udpd"
-    cp "${MYDIR}/splim_udpd_start.sh" /data_persist/ && echo "splim_udpd_start.sh has been copied"
-    chmod 0755 /data_persist/splim_udpd_start.sh
-  elif includes_carplay; then
-    echo "splim_udpd not in payload, skipping"
-  fi
-
   # --- Install ESP32 USB serial → splim daemon (splim_seriald) -----------
-  # Preferred VietMap path: BLE HUD emulator → CDC "SPLIM N" → /data_persist/splim.
-  # Enable with carplay_seriald_launch=true (and usually carplay_udpd_launch=false).
+  # VietMap path: BLE HUD emulator → CDC "SPLIM N" → /data_persist/splim.
+  # Automatically launched when carplay_speed_limit=true.
   if includes_carplay && [ -f "${MYDIR}/splim_seriald" ]; then
     cp "${MYDIR}/splim_seriald" "${MOD_DIR}/" && echo "splim_seriald has been copied"
     chmod 0755 "${MOD_DIR}/splim_seriald"
